@@ -232,7 +232,6 @@ threshold_table <- bind_rows(threshold_table) |>
 threshold_table |> print(n = Inf)
 ```
 
-
 ```{r REGRESSION ISCO + SEX + PREV_PARTY}
 # A previous party added to the occupation and sex. has_prev_party is TRUE or NA, because
 # the absence of a previous party cannot be told apart from the absence of evidence of one;
@@ -278,8 +277,6 @@ threshold_table |> print(n = Inf)
 # an odds ratio in the thousands with a huge standard error means a category has no
 # variation left (complete separation): read the Fisher tables above instead
 ```
-
-
 
 # Tables for the text
 
@@ -332,7 +329,6 @@ stargazer(as.data.frame(rq2_descriptives), summary = FALSE, rownames = FALSE, ty
           notes = c("Number of candidates and share of each group. Fisher: exact test of the variable against the group.",
                     "A candidate can have stood for several parties."))
 ```
-
 
 ```{r TABLE OF RQ2 REGRESSIONS}
 # the logits of the text in one table: odds ratios, with 95% confidence intervals from

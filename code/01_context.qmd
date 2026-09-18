@@ -32,7 +32,6 @@ table_type <- "text"
 
 # Charts of the theoretical framework
 
-
 ```{r ELECTORAL SYSTEM MAP}
 electoral_system_database <-
   read_excel(here("data", "raw", "idea_electoral_systems.xlsx")) |> 
@@ -64,9 +63,8 @@ europe |>
   mutate(pct = round(100 * n / sum(n), 1)) |>
   arrange(desc(n))
 ```
-Maldita from Wayback Machine 
-https://maldita.es/malditodato/20240229/partidos-politicos-registro-ministerio-interior/
-https://files.maldita.es/uploads/2024/02/65df376828af1informefirma-1706550494955-pdf.pdf#toolbar=0
+
+Maldita from Wayback Machine https://maldita.es/malditodato/20240229/partidos-politicos-registro-ministerio-interior/ https://files.maldita.es/uploads/2024/02/65df376828af1informefirma-1706550494955-pdf.pdf#toolbar=0
 
 ```{r PARTY REGISTRY}
 party_registry_maldita <- read_csv(here("data", "raw", "party_registry", "party_registry_maldita_2024.csv"), show_col_types = FALSE)
@@ -105,10 +103,6 @@ all_parties <- party_registry_maldita |>
   arrange(registration_date)
 ```
 
-FE de las JONS aparece dos veces sin fecha de inscripción: protocolo 21 "(Novillo)" y 22 "(Zulueta)", que son las dos facciones que pidieron la inscripción en 1976. En cambio, party_register la da inscrita el 04/10/1976. Para la fecha de FE de las JONS usa esa.
-Alianza Popular (protocolo 961) sale sin fecha de inscripción. Es por cómo lo registra el Ministerio: el PP heredó la inscripción de AP.
-
-
 ```{r TABLE OF FAR RIGHT PARTIES BEFORE VOX}
 casals_parties <- c(
   "FUERZA NUEVA", "CENTRO DEMOCRATICO Y SOCIAL", "JUNTAS ESPAÑOLAS", "FRENTE NACIONAL",
@@ -144,7 +138,6 @@ stargazer(as.data.frame(far_right_table), summary = FALSE, rownames = FALSE, typ
           notes = c("Source: Ministry of the Interior registry of political parties (Maldita 2024; update of September 2026).",
                     "Parties selected following Casals (2020). Cancelled: date the party was struck off the registry."))
 ```
-
 
 ```{r FAMILY TREE FAR PARTIES 1977-2026}
 library(tidygraph)
@@ -389,7 +382,6 @@ ggraph(far_right_graph, layout = "manual", x = x, y = y) +
         plot.subtitle = element_text(size = 9, colour = "grey35"))
 ```
 
-
 https://web.archive.org/web/20140209110219/http://www.reconversion.es/
 
 ```{r TABLE SIGNEES RECONVERSION.ES}
@@ -415,7 +407,6 @@ signees_reconversion <- read_html("https://web.archive.org/web/20140202204018/ht
 
 signees_reconversion
 ```
-
 
 ```{r TABLE OF VOX FOUNDERS}
 founders <- tribble(
@@ -469,7 +460,6 @@ stargazer(as.data.frame(founders_table), summary = FALSE, rownames = FALSE, type
           title = "Founders of Vox",
           notes = "Founding members of Vox and their relationship with the party.")
 ```
-
 
 ```{r RESULTS LINE CHART VOTES}
 # Vox's share of the valid vote and its seats in the Congress (Ministry of the Interior,
@@ -534,7 +524,6 @@ ggplot(vox_vote, aes(date, vote_share, colour = chamber, shape = chamber)) +
   theme(legend.position = "bottom", panel.grid.minor = element_blank(),
         plot.caption = element_text(hjust = 0, colour = "grey40"))
 ```
-
 
 # Replication of Rama et al. (2021), figure 4.12
 
@@ -710,7 +699,6 @@ ggplot(filter(margins, model == "1 Logit"), aes(ame, term)) +
         axis.ticks.x = element_line(colour = "grey40"),
         plot.margin = margin(10, 20, 10, 10))
 ```
-
 
 # Objects for the next scripts
 
