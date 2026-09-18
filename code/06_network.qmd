@@ -1,0 +1,442 @@
+---
+title: "06 · Network of electable candidates"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Network of the candidates placed at least once within the electability threshold, the heads of municipal lists that won a seat and the members of the satellite organisations, exported to Gephi.
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+
+# objects made by 01_context.qmd
+load(here("data", "processed", "01_context.RData"))
+
+# objects made by 03_satellite_organisations.qmd
+load(here("data", "processed", "03_satellite_organisations.RData"))
+
+# objects made by 04_data_enrichment.qmd
+load(here("data", "processed", "04_data_enrichment.RData"))
+```
+
+# Network of electable candidates
+
+```{r EDGELIST CREATION}
+library(tidyverse)
+
+network_candidates <- vox_candidates |>
+  mutate(
+    contest = case_when(
+      level == "National" ~ election,
+      level == "Autonomical" ~ str_c(election, chamber, sep = " | "),
+      level == "Municipal" ~ str_c(
+        election,
+        coalesce(province, ""),
+        chamber,
+        sep = " | "
+      ),
+      TRUE ~ NA_character_
+    ),
+    # in municipal elections there are no CIS estimates, so the ex ante rule (previous
+    # result in the same municipality) misses the local breakthrough of 2019: the head
+    # of a list that won at least one councillor is also electable
+    electable = coalesce(top_expected, FALSE) | coalesce(top_won, FALSE) |
+      (level == "Municipal" & list_position == 1 & is_titular %in% c(TRUE, NA) & is_elected %in% TRUE)
+  ) |>
+  filter(!is.na(contest), !is.na(person_id))
+
+node_ids <- network_candidates |>
+  filter(electable) |>
+  distinct(person_id)
+
+# ---- members of Vox's satellite organisations ---------------------------------------------
+# every member is a node, whether or not they stood for Vox. The ones who did are matched
+# with their candidate name, which is often longer ("IVAN VELEZ" is "ISMAEL IVAN VELEZ
+# CIPRIANO"): the words of the member's name must appear in the candidate's name in the
+# same order, with a middle name allowed after the first one
+satellites <- c("DENAES", "Disenso", "ISSEP", "HazteOir", "CitizenGO", "Solidaridad", "Revuelta", "Homo Legens")
+
+satellite_members <- people |>
+  filter(organisation %in% satellites, str_count(person, " ") >= 1) |>
+  distinct(organisation, person)
+
+candidate_words <- network_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+# every candidate each member's name fits
+satellite_fits <- satellite_members |>
+  distinct(person) |>
+  # particles are dropped from both names ("IGNACIO DE HOCES INIGUEZ" is "IGNACIO HOCES INIGUEZ")
+  mutate(core = str_squish(str_remove_all(person, "\\b(DE|DEL|LA|LAS|LOS|Y)\\b")),
+         word = word(core, -1)) |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  mutate(candidate_core = str_squish(str_remove_all(person_id, "\\b(DE|DEL|LA|LAS|LOS|Y)\\b")),
+         pattern = str_c("^(.*?)\\b", word(core, 1), "\\b(.*?)\\b", word(core, 2, -1), "\\b"),
+         before  = str_match(candidate_core, pattern)[, 2],
+         between = str_match(candidate_core, pattern)[, 3]) |>
+  # the words before the member's first name and between it and the surname must be
+  # forenames of the INE census ("ISMAEL IVAN VELEZ", "ANA MARIA VELASCO"), never surnames:
+  # "SUSANA DIAZ" is not "SUSANA GARCIA DIAZ". A member named with more than one surname
+  # is specific enough to skip the test ("HERMANN TERTSCH VALLELERSUNDI" is "HERMANN
+  # LEOPOLD TERTSCH VALLELERSUNDI", and Leopold is not in the census)
+  filter(!is.na(before),
+         str_count(core, " ") >= 2 |
+           map_lgl(str_split(str_squish(str_c(before, " ", between)), " "),
+                   \(w) all(w %in% c("", census_forenames$forename)))) |>
+  distinct(person, person_id) |>
+  mutate(electable = person_id %in% node_ids$person_id)
+
+# a name that fits several candidates ("RICARDO CHAMORRO": Delmo and Arevalo) goes to the
+# one who was electable, if only one was; otherwise it is left out
+satellite_matches <- satellite_fits |>
+  filter(n() == 1 | (electable & sum(electable) == 1), .by = person)
+
+# members matched to a candidate under a longer name: check them
+satellite_matches |> filter(person != person_id) |> print(n = Inf)
+
+# names that fit several candidates and were left out: check them by hand
+satellite_fits |> filter(!person %in% satellite_matches$person) |> print(n = Inf)
+
+# members who never stood for Vox, or did so under a name that could not be matched:
+# look for the second kind here
+satellite_members |> filter(!person %in% satellite_fits$person) |> arrange(organisation, person) |> print(n = Inf)
+
+# each member with the id of their node: the candidate's if matched, their own otherwise
+satellite_nodes <- satellite_members |>
+  left_join(satellite_matches |> select(person, person_id), by = "person") |>
+  mutate(person_id = coalesce(person_id, person))
+
+# the members who stood for Vox join the candidacy network even if never electable
+node_ids <- node_ids |>
+  bind_rows(satellite_nodes |> filter(person_id %in% network_candidates$person_id) |> distinct(person_id)) |>
+  distinct()
+
+# ---- families of the previous parties, for the colours of the nodes ------------------
+# the far right split as in the text (Casals): nostalgic Francoist and Falangist right,
+# ultra-Catholic and traditionalist parties, national-populist right, neo-Nazi fringe
+# and personalist vehicles; the mainstream parties apart
+party_families <- tribble(
+  ~party,     ~family,
+  "PP",       "PP",
+  "AP",       "PP",
+  "Cs",       "Cs",
+  "FN",       "Francoist / Falangist",
+  "JJEE",     "Francoist / Falangist",
+  "FE-JONS",  "Francoist / Falangist",
+  "FA",       "Francoist / Falangist",
+  "FE-2000",  "Francoist / Falangist",
+  "LF",       "Francoist / Falangist",
+  "ADÑ",      "Francoist / Falangist",
+  "AES",      "Ultra-Catholic / traditionalist",
+  "CTC",      "Ultra-Catholic / traditionalist",
+  "DN",       "National-populist",
+  "E2000",    "National-populist",
+  "PxC",      "National-populist",
+  "VD",       "National-populist",
+  "SOMI",     "National-populist",
+  "PxL",      "National-populist",
+  "NOSOTROS", "National-populist",
+  "HN",       "National-populist",
+  "ADN",      "National-populist",
+  "MSR",      "Neo-Nazi",
+  "AN",       "Neo-Nazi",
+  "GIL",      "Personalist populist",
+  "ARM",      "Personalist populist",
+  "CDS",      "Other right and centre",
+  "PADE",     "Other right and centre",
+  "UPN",      "Other right and centre",
+  "Foro",     "Other right and centre",
+  "PDP",      "Other right and centre",
+  "AG",       "Other right and centre",
+  "SCD",      "Other right and centre",
+  "ACTUA",    "Other right and centre",   # Actúa Baleares
+  "SR",       "Other right and centre",   # Somos Región (Murcia)
+  "CiU",      "Other right and centre",
+  "PSOE",     "Left",
+  "PSC",      "Left",
+  "PCE-EPK",  "Left"
+)
+
+# a candidate with several families keeps the first one in this order: a far-right past
+# is kept over a mainstream one, being the rarer and more telling of the two
+family_order <- c("Neo-Nazi", "Francoist / Falangist", "Ultra-Catholic / traditionalist",
+                  "National-populist", "Personalist populist", "PP", "Cs",
+                  "Other right and centre", "Left", "None")
+
+# the palette to set in Gephi (Appearance > Nodes > Partition > prev_party_family)
+family_colours <- c("Neo-Nazi"                        = "#000000",
+                    "Francoist / Falangist"           = "#D55E00",
+                    "Ultra-Catholic / traditionalist" = "#6A3D9A",
+                    "National-populist"               = "#009E73",
+                    "Personalist populist"            = "#F0E442",
+                    "PP"                              = "#0072B2",
+                    "Cs"                              = "#E69F00",
+                    "Other right and centre"          = "#56B4E9",
+                    "Left"                            = "#CC79A7",
+                    "None"                            = "#D9D9D9")
+
+# a member of a satellite organisation is coloured by the organisation instead
+satellite_colours <- c("DENAES"      = "#8C510A",
+                       "Disenso"     = "#DFC27D",
+                       "ISSEP"       = "#E7298A",
+                       "HazteOir"    = "#66A61E",
+                       "CitizenGO"   = "#1B7837",
+                       "Solidaridad" = "#A50026",
+                       "Revuelta"    = "#FB9A99",
+                       "Homo Legens" = "#01665E")
+
+# parties without a family (must return 0 rows)
+vox_candidates |>
+  filter(!is.na(prev_party)) |>
+  separate_longer_delim(prev_party, " | ") |>
+  distinct(prev_party) |>
+  filter(!prev_party %in% party_families$party)
+
+vox_nodes <- network_candidates |>
+  semi_join(node_ids, by = "person_id") |>
+  group_by(person_id) |>
+  summarise(
+    name = first(candidate),
+    contests = n_distinct(contest),
+    contests_electable = n_distinct(contest[electable]),
+    has_prev_party = any(coalesce(has_prev_party, FALSE)),
+    prev_party = {
+      x <- prev_party[
+        coalesce(has_prev_party, FALSE) &
+          !is.na(prev_party)
+      ]
+      x <- x |>
+        str_split(fixed(" | ")) |>
+        unlist() |>
+        str_squish() |>
+        unique() |>
+        sort()
+      if (length(x) == 0) NA_character_ else str_c(x, collapse = " | ")
+    },
+    .groups = "drop"
+  ) |>
+  mutate(
+    n_prev_parties = case_when(
+      is.na(prev_party) ~ 0L,
+      TRUE ~ str_count(prev_party, fixed(" | ")) + 1L
+    ),
+    # every family of the person's previous parties, and the one that colours the node
+    prev_party_families = map_chr(str_split(replace_na(prev_party, ""), fixed(" | ")), \(p) {
+      families <- party_families$family[party_families$party %in% p]
+      if (length(families) == 0) "None" else str_c(intersect(family_order, families), collapse = " | ")
+    }),
+    prev_party_family = word(prev_party_families, 1, sep = fixed(" | "))
+  ) |>
+  # the members who never stood for Vox, as nodes of their own
+  bind_rows(satellite_nodes |>
+              filter(!person_id %in% network_candidates$person_id) |>
+              distinct(person_id) |>
+              mutate(name = str_to_title(person_id), contests = 0L, contests_electable = 0L,
+                     has_prev_party = FALSE, n_prev_parties = 0L,
+                     prev_party_families = "None", prev_party_family = "None")) |>
+  # the satellite organisations of each node (in the order of `satellites`)
+  left_join(satellite_nodes |>
+              summarise(organisations = str_c(intersect(satellites, organisation), collapse = " | "),
+                        .by = person_id),
+            by = "person_id") |>
+  mutate(satellite = !is.na(organisations),
+         candidate = contests > 0,
+         # the attribute that colours the node: the organisation for its members, the
+         # family of the previous party for everybody else
+         family    = if_else(satellite, word(organisations, 1, sep = fixed(" | ")), prev_party_family),
+         colour    = unname(c(family_colours, satellite_colours)[family]))
+
+participants <- network_candidates |>
+  semi_join(node_ids, by = "person_id") |>
+  group_by(contest, person_id) |>
+  summarise(
+    electable = any(electable),
+    .groups = "drop"
+  )
+
+vox_edges <- participants |>
+  inner_join(
+    participants,
+    by = "contest",
+    suffix = c("_from", "_to"),
+    relationship = "many-to-many"
+  ) |>
+  filter(
+    person_id_from < person_id_to,
+    electable_from | electable_to
+  ) |>
+  count(
+    from = person_id_from,
+    to = person_id_to,
+    name = "weight"
+  )
+
+# members of the same satellite organisation are linked as well; a pair can be linked by
+# both kinds of tie, recorded in `tie`
+organisation_edges <- satellite_nodes |>
+  distinct(organisation, person_id) |>
+  inner_join(satellite_nodes |> distinct(organisation, person_id), by = "organisation",
+             suffix = c("_from", "_to"), relationship = "many-to-many") |>
+  filter(person_id_from < person_id_to) |>
+  count(from = person_id_from, to = person_id_to, name = "weight")
+
+vox_edges <- bind_rows(vox_edges |> mutate(tie = "candidacy"),
+                       organisation_edges |> mutate(tie = "organisation")) |>
+  summarise(weight = sum(weight), tie = str_c(sort(unique(tie)), collapse = " + "), .by = c(from, to))
+
+vox_nodes |> count(family, colour, sort = TRUE)
+vox_edges |> count(tie)
+
+vox_nodes_gephi <- vox_nodes |>
+  mutate(Id = as.character(person_id), Label = as.character(name)) |>
+  select(Id, Label, family, prev_party, prev_party_family, prev_party_families, n_prev_parties,
+         has_prev_party, organisations, satellite, candidate, contests, contests_electable, colour)
+
+vox_edges_gephi <- vox_edges |>
+  mutate(Source = as.character(from), Target = as.character(to),
+         Type = "Undirected", Weight = as.numeric(weight)) |>
+  select(Source, Target, Type, Weight, tie)
+
+write_csv(vox_nodes_gephi, here("outputs", "network", "vox_nodes_gephi.csv"))
+write_csv(vox_edges_gephi, here("outputs", "network", "vox_edges_gephi.csv"))
+```
+
+
+
+# Network analysis (section 5.4)
+
+```{r NETWORK ANALYSIS}
+library(igraph)
+
+# the network exported to Gephi, analysed here: every figure of section 5.4 comes from this chunk
+set.seed(20260918)
+vox_graph <- graph_from_data_frame(vox_edges_gephi |> select(Source, Target, weight = Weight, tie),
+                                   directed = FALSE, vertices = vox_nodes_gephi)
+
+# ---- 1. size and structure --------------------------------------------------------------------
+network_components <- components(vox_graph)
+V(vox_graph)$degree <- degree(vox_graph)
+V(vox_graph)$giant  <- network_components$membership == which.max(network_components$csize)
+giant <- induced_subgraph(vox_graph, V(vox_graph)$giant)
+
+tibble(nodes            = vcount(vox_graph),
+       ties             = ecount(vox_graph),
+       density          = round(edge_density(vox_graph), 4),
+       components       = network_components$no,
+       giant_component  = max(network_components$csize),
+       giant_share      = round(100 * max(network_components$csize) / vcount(vox_graph), 1),
+       isolated         = sum(V(vox_graph)$degree == 0),
+       mean_distance    = round(mean_distance(giant, weights = NA), 2),
+       diameter         = diameter(giant, weights = NA),
+       transitivity     = round(transitivity(giant), 3),
+       degree_assortativity = round(assortativity_degree(vox_graph, directed = FALSE), 3)) |>
+  pivot_longer(everything(), names_to = "statistic", values_transform = as.character) |>
+  print(n = Inf)
+
+vox_edges_gephi |> count(tie)
+
+# ---- 2. centrality of every node --------------------------------------------------------------
+# degree: all ties; degree_candidacy: only the ties of standing in the same election (without the
+# ties between members of the same organisation); betweenness: normalised, in the giant component
+candidacy_graph <- subgraph_from_edges(vox_graph, E(vox_graph)[str_detect(tie, "candidacy")],
+                                       delete.vertices = FALSE)
+
+network_centrality <- as_data_frame(vox_graph, what = "vertices") |>
+  as_tibble() |>
+  mutate(degree_candidacy = degree(candidacy_graph)[name]) |>
+  left_join(tibble(name        = V(giant)$name,
+                   betweenness = betweenness(giant, normalized = TRUE, weights = NA)),
+            by = "name") |>
+  mutate(rank_degree    = min_rank(desc(degree)),
+         rank_candidacy = min_rank(desc(degree_candidacy)),
+         group = case_when(satellite & candidate ~ "Satellite member and candidate",
+                           satellite             ~ "Satellite member only",
+                           has_prev_party        ~ "Previous party",
+                           TRUE                  ~ "No party, no satellite"))
+
+# the ten nodes with most ties, and the ten main brokers
+network_centrality |>
+  arrange(desc(degree)) |>
+  select(name, family, organisations, degree, degree_candidacy, contests_electable, betweenness) |>
+  head(10)
+
+network_centrality |>
+  arrange(desc(betweenness)) |>
+  select(name, family, prev_party, organisations, degree, betweenness) |>
+  head(10)
+
+# ---- 3. who sits at the centre ----------------------------------------------------------------
+# satellite members against the rest (candidacy ties only, so that belonging to the same
+# organisation does not inflate their degree)
+network_centrality |>
+  filter(candidate) |>
+  summarise(nodes          = n(),
+            in_giant       = round(100 * mean(giant), 1),
+            median_degree  = median(degree_candidacy),
+            mean_degree    = round(mean(degree_candidacy), 1),
+            in_top_100     = sum(rank_candidacy <= 100),
+            .by = group)
+
+# by the family of the previous party (historical far right against the PP)
+network_centrality |>
+  filter(candidate) |>
+  mutate(previous_family = case_when(prev_party_family %in% c("Neo-Nazi", "Francoist / Falangist",
+                                                              "Ultra-Catholic / traditionalist",
+                                                              "National-populist") ~ "Historical far right",
+                                     TRUE ~ prev_party_family)) |>
+  summarise(nodes         = n(),
+            median_degree = median(degree_candidacy),
+            mean_degree   = round(mean(degree_candidacy), 1),
+            in_top_100    = sum(rank_candidacy <= 100),
+            .by = previous_family) |>
+  arrange(desc(nodes))
+
+# ---- 4. communities (Louvain, giant component) -----------------------------------------------
+# Louvain is random: the seed fixes the partition, so that the numbers of the text can be reproduced
+set.seed(2026)
+louvain <- cluster_louvain(giant)
+cat("communities:", length(louvain), "| modularity:", round(modularity(louvain), 3), "\n")
+
+# what each community is: its size, its satellite members and the arenas where its members stood
+network_arenas <- vox_candidates |>
+  mutate(arena = case_when(level == "National"    ~ str_c(chamber, " ", province),
+                           level == "Autonomical" ~ chamber,
+                           TRUE                   ~ str_c("Municipal ", province))) |>
+  distinct(person_id, level, arena)
+
+tibble(name = V(giant)$name, community = as.integer(membership(louvain))) |>
+  left_join(network_centrality |> select(name, family, satellite, degree), by = "name") |>
+  left_join(network_arenas, by = c("name" = "person_id"), relationship = "many-to-many") |>
+  summarise(size          = n_distinct(name),
+            satellites    = n_distinct(name[satellite]),
+            national      = round(100 * n_distinct(name[level %in% "National"]) / size),
+            regional      = round(100 * n_distinct(name[level %in% "Autonomical"]) / size),
+            main_arenas   = str_c(names(head(sort(table(arena), decreasing = TRUE), 3)), collapse = " / "),
+            best_connected = str_c(head(unique(name[order(-degree)]), 3), collapse = "; "),
+            .by = community) |>
+  arrange(desc(size)) |>
+  print(n = Inf, width = Inf)
+```

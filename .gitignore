@@ -1,0 +1,20 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.positai
+
+# objects the scripts pass to each other (rebuilt by running code/ in order)
+data/processed/
+
+# too large for GitHub, or not ours to redistribute (see README, "Data not in the repository")
+data/raw/infoelectoral_repo/
+data/raw/autonomicas_scrape/
+data/raw/organizaciones/
+data/raw/datos_pp_locales/
+data/raw/comite_ejecutivo/
+data/raw/cis_3269/
+docs/*.pdf
+outputs/thesis/plantilla_tfm.doc
+.~lock.*
+*.RDataTmp

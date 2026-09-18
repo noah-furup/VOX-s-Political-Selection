@@ -1,0 +1,645 @@
+---
+title: "02 · Data extraction"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Candidates of Vox, the PP, Ciudadanos and the historical far right in the general, European, regional and municipal elections. General and European lists come from the Ministry of the Interior (infoelectoral) and its GitHub mirror; regional and municipal lists from the files in `data/raw/candidates`.
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+```
+
+# General and European elections
+
+Extraction of general elections candidates: european and general elections via github.com/JaimeObregon/infoelectoral
+
+
+```{r GITHUB AND INTERIOR MINISTERY PORTAL}
+GITHUB <- "https://raw.githubusercontent.com/JaimeObregon/infoelectoral/main/files"
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+```
+
+The github has the files in .DAT, a file type that doesn't separate in ";" or "\|". In order to separate each column, we need to map where the separation between each variable occurs. I asked Claude to give me the exact character positions where the separation is. I used fwf_positions of ReadR to write down the column names, given the positions where the variables lie in the .DAT file.
+
+
+```{r FIXED POSITIONS}
+# positions of each variable in the .DAT files
+cols_parties <- fwf_cols(
+  party_code   = c(9, 14),
+  abbreviation = c(15, 64),
+  party_name   = c(65, 214)
+)
+
+cols_candidates <- fwf_cols(
+  province_code  = c(10, 11),
+  party_code     = c(16, 21),
+  list_position  = c(22, 24),
+  candidate_type = c(25, 25),
+  candidate      = c(26, 100),
+  sex            = c(101, 101),
+  elected        = c(120, 120)
+)
+```
+
+```{r GENERAL AND EUROPEAN ELECTIONS TIBBLE (2014-2024)}
+elections <- tribble(
+  ~process, ~year,  ~month, ~chamber,              ~mirror_folder,
+  "02",     "1977", "06",   "Congress",            "congreso",
+  "02",     "1979", "03",   "Congress",            "congreso",
+  "02",     "1982", "10",   "Congress",            "congreso",
+  "02",     "1986", "06",   "Congress",            "congreso",
+  "02",     "1989", "10",   "Congress",            "congreso",
+  "02",     "1993", "06",   "Congress",            "congreso",
+  "02",     "1996", "03",   "Congress",            "congreso",
+  "02",     "2000", "03",   "Congress",            "congreso",
+  "02",     "2004", "03",   "Congress",            "congreso",
+  "02",     "2008", "03",   "Congress",            "congreso",
+  "02",     "2011", "11",   "Congress",            "congreso",
+  "02",     "2015", "12",   "Congress",            "congreso",
+  "02",     "2016", "06",   "Congress",            "congreso",
+  "02",     "2019", "04",   "Congress",            "congreso",
+  "02",     "2019", "11",   "Congress",            "congreso",
+  "02",     "2023", "07",   "Congress",            "congreso",
+  "03",     "1977", "06",   "Senate",              "senado",
+  "03",     "1979", "03",   "Senate",              "senado",
+  "03",     "1982", "10",   "Senate",              "senado",
+  "03",     "1986", "06",   "Senate",              "senado",
+  "03",     "1989", "10",   "Senate",              "senado",
+  "03",     "1993", "06",   "Senate",              "senado",
+  "03",     "1996", "03",   "Senate",              "senado",
+  "03",     "2000", "03",   "Senate",              "senado",
+  "03",     "2004", "03",   "Senate",              "senado",
+  "03",     "2008", "03",   "Senate",              "senado",
+  "03",     "2011", "11",   "Senate",              "senado",
+  "03",     "2015", "12",   "Senate",              "senado",
+  "03",     "2016", "06",   "Senate",              "senado",
+  "03",     "2019", "04",   "Senate",              "senado",
+  "03",     "2019", "11",   "Senate",              "senado",
+  "03",     "2023", "07",   "Senate",              "senado",
+  "07",     "2014", "05",   "European Parliament", "europeas",
+  "07",     "2019", "05",   "European Parliament", "europeas",
+  "07",     "2024", "06",   "European Parliament", "europeas"
+)
+```
+
+
+types of processes: 02 = congress, 03 = Senate, 07 = European Parliament
+
+```{r ADD SOURCE AND PATH OF EACH ELECTION}
+elections <-
+  elections |>
+  mutate(
+    folder    = str_c(process, year, month, "_TOTA"),
+    code      = str_c(process, str_sub(year, 3, 4), month),
+    on_github = !(year %in% c("2023", "2024") |
+                    (chamber == "Congress" & year %in% c("1989", "1993"))),
+    path      = if_else(on_github,
+                        str_c(GITHUB, "/", mirror_folder, "/", folder, "/"),
+                        str_c(tempdir(), "/", folder, "/"))
+  )
+
+```
+
+```{r DOWNLOAD NON-GITHUB DATA TO TEMPORARY FOLDER}
+for (folder in elections$folder[!elections$on_github]) {
+  zip_file <- tempfile(fileext = ".zip")
+  download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file, mode = "wb",
+                method = "libcurl", headers = c("User-Agent" = "Mozilla/5.0"))
+  unzip(zip_file, exdir = str_c(tempdir(), "/", folder), junkpaths = TRUE)
+}
+```
+
+```{r READ CANDIDATES FROM PATH}
+
+# candidates of every election (file 04)
+candidates <- elections |>
+  rowwise() |>
+  reframe(
+    folder, chamber, year, month,
+    read_fwf(str_c(path, "04", code, ".DAT"), cols_candidates,
+             locale = locale(encoding = "ISO-8859-1"), col_types = cols(.default = "c"))
+  )
+
+candidates
+```
+
+```{r JOIN PARTIES TO CANDIDATES}
+# parties of every election (file 03)
+parties <- elections |>
+  rowwise() |>
+  reframe(
+    folder,
+    read_fwf(str_c(path, "03", code, ".DAT"), cols_parties,
+             locale = locale(encoding = "ISO-8859-1"), col_types = cols(.default = "c"))
+  )
+
+all_candidates <-
+  candidates |> 
+  left_join(parties,   by = c("folder", "party_code"))
+
+all_candidates
+```
+
+```{r JOIN PROVINCE TO CANDIDATES}
+provinces <- tribble(
+  ~province_code, ~province,
+  "01", "Araba/Alava",    "02", "Albacete",      "03", "Alicante",
+  "04", "Almeria",        "05", "Avila",         "06", "Badajoz",
+  "07", "Illes Balears",  "08", "Barcelona",     "09", "Burgos",
+  "10", "Caceres",        "11", "Cadiz",         "12", "Castellon",
+  "13", "Ciudad Real",    "14", "Cordoba",       "15", "A Coruna",
+  "16", "Cuenca",         "17", "Girona",        "18", "Granada",
+  "19", "Guadalajara",    "20", "Gipuzkoa",      "21", "Huelva",
+  "22", "Huesca",         "23", "Jaen",          "24", "Leon",
+  "25", "Lleida",         "26", "La Rioja",      "27", "Lugo",
+  "28", "Madrid",         "29", "Malaga",        "30", "Murcia",
+  "31", "Navarra",        "32", "Ourense",       "33", "Asturias",
+  "34", "Palencia",       "35", "Las Palmas",    "36", "Pontevedra",
+  "37", "Salamanca",      "38", "S.C. Tenerife", "39", "Cantabria",
+  "40", "Segovia",        "41", "Sevilla",       "42", "Soria",
+  "43", "Tarragona",      "44", "Teruel",        "45", "Toledo",
+  "46", "Valencia",       "47", "Valladolid",    "48", "Bizkaia",
+  "49", "Zamora",         "50", "Zaragoza",      "51", "Ceuta",
+  "52", "Melilla",        "99", "Single national constituency"
+)
+
+ all_candidates <-
+  all_candidates |>
+  left_join(provinces, by = "province_code")
+ 
+ all_candidates 
+```
+
+```{r MUTATE AND SELECT VARIABLES OF ALL_CANDIDATES}
+
+all_candidates <-
+  all_candidates |> 
+  mutate(
+    election      = str_c(if_else(chamber == "European Parliament", "european", "general"),
+                          "_", year, "_", month),
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex           = case_match(sex, "M" ~ "Male", "F" ~ "Female"),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation,
+    level         = "National",
+    .keep = "none"
+  )
+all_candidates
+```
+
+
+```{r TAKE DON/ DOÑA OUT}
+all_candidates <- 
+  all_candidates |>
+  mutate(candidate = str_remove(candidate,
+                                regex("^(don|do[ñn]a|d[.ª])\\s+", ignore_case = TRUE)))
+```
+
+```{r FILTER PP, CS AND VOX}
+pp_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "PP"))
+
+vox_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "VOX"))
+
+cs_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "C's"))
+```
+
+
+```{r FILTER HISTORICAL RADICAL RIGHT PARTIES}
+radical_right_candidates <- bind_rows(
+  read_excel(here("data", "raw", "candidates", "candidatos_partidos_historicos.xlsx"), sheet = "01 Generales"),
+  read_excel(here("data", "raw", "candidates", "candidatos_partidos_historicos.xlsx"), sheet = "02 Europeas"))
+
+```
+
+# Regional elections
+
+Claude Code For Autonomical elections: two attempts to confirm it is reproducible.
+
+Prompt 1:
+
+"Quiero que busques todas las listas de todas las elecciones autonómicas que han habido en España desde 2015 hasta 2026 y que pongas en el archivo excel en el excel de CANDIDATOS_AUTONOMICAS. Tienes que ir a la web para recopilar las siguientes variables de cada eleccion: CANDIDATO, CCAA, ELECCION, CIRCUNSCRIPCION, ORDEN, ELEGIDO (TRUE/FALSE)"
+
+Prompt 2:
+
+"You're a Computational Social Scientist. I want you to search for every candidate list of all autonomical elections in Spain from 2015 to 2026 of the following parties: PP and VOX. You have to get into the web and recopilate the following variables for each election:
+
+election: election (write it in like this: "autonomous_2015_05", where 2015 would be the year and 05 the month where the election took place) year: year of the election chamber: the chamber (such as Parlament of Andalucia, Parlament of Catalonia...) province: the province that was being represented by the candidate list_position: the position of the candidate within that list candidate: the candidate's full name is_titular: whether he was the titular of that seat or he was a substitution candidate (TRUE/FALSE), is_elected: whether he was elected (TRUE/FALSE) abbreviation: the abbreviation of the party's name
+
+the final file should be a csv file."
+
+
+```{r AUTONOMICAL CANDIDATES 2000-2012 PP}
+autonomical_pre2015 <-
+  read_csv(here("data", "raw", "autonomicas_scrape", "out_pre2015", "pp_autonomicas_2000_2012.csv")) |> 
+  mutate(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex,
+    is_titular,
+    is_elected,   
+    abbreviation,
+    level         = "Autonomical",
+    .keep = "none")
+
+autonomical_pre2015
+```
+
+```{r AUTONOMICAL CANDIDATES 2015-2026 PP AND VOX}
+autonomical_2015_2026 <- 
+  read_csv(here("data", "raw", "candidates", "candidatos_pp_vox_autonomicas_2015_2026.csv")) |>
+  mutate(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex,
+    is_titular,
+    is_elected,
+    abbreviation,
+    level         = "Autonomical",
+    .keep = "none")
+```
+
+```{r FILTER PP AND VOX}
+autonomical_candidates <- bind_rows(autonomical_pre2015, autonomical_2015_2026)
+
+pp_candidates__autonomical <- autonomical_candidates |> 
+  filter(str_detect(abbreviation, "PP"))
+
+vox_candidates_autonomical <- autonomical_candidates |> 
+  filter(str_detect(abbreviation, "VOX"))
+
+vox_candidates_autonomical
+```
+
+```{r READ CIUDADANOS CANDIDATES AUTONOMICAL 2015-2026}
+cs_candidates_autonomical <- 
+  read_csv(here("data", "raw", "candidates", "candidatos_cs_autonomicas_2015_2026.csv")) |> 
+  select(election, year, chamber, province, list_position, candidate, sex, is_titular, is_elected, abbreviation) |> 
+  mutate(sex = if_else(str_detect(sex, "Mujer"), "Female", "Male"))
+
+cs_candidates_autonomical
+```
+
+
+```{r RADICAL RIGHT CANDIDATES}
+radical_right_candidates <- bind_rows(radical_right_candidates,
+  read_excel(here("data", "raw", "candidates", "candidatos_partidos_historicos.xlsx"), sheet = "03 Autonomicas")
+) |>
+  mutate(candidate = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+```
+
+```{r JOIN GENERAL ELECTIONS AND AUTONOMICAL}
+pp_candidates <-
+  bind_rows(pp_candidates, pp_candidates__autonomical)
+
+vox_candidates <-
+  bind_rows(vox_candidates, vox_candidates_autonomical)
+
+cs_candidates <-
+  bind_rows(cs_candidates, cs_candidates_autonomical)
+```
+
+
+# Municipal elections
+
+
+```{r READ ALL VOX MUNICIPAL CANDIDATES}
+# municipality -> province, from the INE list (one sheet per province). The key
+# ignores accents, case and the order of the bilingual halves, because the file
+# writes "Alicante/Alacant" and the INE "Alacant/Alicante".
+municipalities <- list()
+for (s in excel_sheets(here("data", "raw", "ine", "ine_codmun_2026.xlsx"))) {
+  municipalities[[s]] <- read_excel(here("data", "raw", "ine", "ine_codmun_2026.xlsx"), sheet = s, skip = 2,
+                                    col_types = "text") |>
+    filter(!is.na(CMUN)) |>
+    transmute(province_code = CPRO, municipality = NOMBRE)
+}
+municipalities <- bind_rows(municipalities) |>
+  left_join(provinces, by = "province_code") |>
+  mutate(muni_key = municipality |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  distinct(muni_key, province)
+
+municipal_vox <- readxl::read_xlsx(here("data", "raw", "candidates", "candidatos_municipales.xlsx")) |>
+  mutate(muni_key = CIRCUNSCRIPCION |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  left_join(municipalities, by = "muni_key", relationship = "many-to-many")
+
+# a municipality name shared by several provinces ("Villanueva", "Castrillo"...)
+# duplicates the rows: keep the province that belongs to the list's region, taken
+# from the names that are not shared
+region_provinces <- municipal_vox |>
+  group_by(ELECCION, CIRCUNSCRIPCION, ORDEN) |>
+  filter(n() == 1) |>
+  ungroup() |>
+  distinct(CCAA, province)
+
+municipal_vox <- municipal_vox |>
+  group_by(ELECCION, CIRCUNSCRIPCION, ORDEN) |>
+  filter(n() == 1 | province %in% region_provinces$province[region_provinces$CCAA == first(CCAA)]) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  transmute(
+    election      = ELECCION,
+    year          = as.integer(str_extract(ELECCION, "\\d{4}")),
+    chamber       = CIRCUNSCRIPCION,   # the municipality
+    province,                          # its province, from the INE list
+    list_position = as.integer(ORDEN),
+    candidate     = CANDIDATO,
+    is_elected    = ELEGIDO,
+    source        = FUENTE,
+    level         = "Municipal"
+  )
+# municipalities the INE list no longer carries under that name (it is dated
+# 1 January 2026 and these data reach 2015), assigned by hand
+manual_provinces <- tribble(
+  ~chamber,                       ~province_manual,
+  "Castell-Platja d'Aro",         "Girona",
+  "Sant Carles de la Ràpita",     "Tarragona",
+  "Moncada",                      "Valencia",
+  "Alfarp",                       "Valencia",
+  "Castelló de la Plana",         "Castellon",
+  "Guadiana del Caudillo",        "Badajoz",
+  "Maó-Mahón",                    "Illes Balears"
+)
+
+municipal_vox <- municipal_vox |>
+  left_join(manual_provinces, by = "chamber") |>
+  mutate(province = coalesce(province, province_manual)) |>
+  select(-province_manual)
+```
+
+
+```{r READ ALL PP MUNICIPAL CANDIDATES}
+# PP candidates in the municipal elections. The ministry's file 04 for municipal
+# elections carries the municipality, and up to 2003 the name is in one field, so
+# read 26-100 as a single block: in the split layout the three fields are adjacent
+# and str_squish collapses the padding to the same result.
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+dir.create("datos_pp_locales", showWarnings = FALSE)
+
+cols_04_local <- fwf_cols(
+  province_code  = c( 10,  11),
+  muni_code      = c( 13,  15),   # 12 is a control digit
+  party_code     = c( 16,  21),
+  list_position  = c( 22,  24),
+  candidate_type = c( 25,  25),
+  full_name_cand = c( 26, 100),
+  sex            = c(101, 101),
+  elected        = c(120, 120)
+)
+latin1 <- locale(encoding = "ISO-8859-1")
+
+# file 03: candidacies (parties)
+cols_03 <- fwf_cols(
+  party_code   = c(  9,  14),
+  abbreviation = c( 15,  64),
+  full_name    = c( 65, 214)
+)
+
+# municipality names, one sheet per province
+municipalities <- list()
+for (s in excel_sheets(here("data", "raw", "ine", "ine_codmun_2026.xlsx"))) {
+  municipalities[[s]] <- read_excel(here("data", "raw", "ine", "ine_codmun_2026.xlsx"), sheet = s, skip = 2,
+                                    col_types = "text")
+}
+municipalities <- bind_rows(municipalities) |>
+  filter(!is.na(CMUN)) |>
+  transmute(province_code = CPRO, muni_code = CMUN, municipality = NOMBRE)
+
+local_candidates <- list()
+years <- c("2003", "2007", "2011", "2015", "2019", "2023")
+
+for (i in seq_along(years)) {
+
+  folder   <- str_c("04", years[i], "05_TOTA")
+  zip_file <- here("data", "raw", "datos_pp_locales", str_c(folder, ".zip"))
+  unzip_to <- tempfile()
+
+  if (!file.exists(zip_file))
+    download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file, mode = "wb", quiet = TRUE)
+  unzip(zip_file, exdir = unzip_to)
+
+  path_03 <- list.files(unzip_to, "^03.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+  path_04 <- list.files(unzip_to, "^04.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+
+  # the full name is the reliable filter: many local parties are abbreviated PPx
+  # ("PPN" is Partido Progresista Nerjeño, "P.P.SO." Plataforma del Pueblo Soriano)
+  parties <- read_fwf(path_03, cols_03, locale = latin1,
+                      col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    filter(str_detect(stringi::stri_trans_general(str_to_upper(full_name),
+                                                  "Latin-ASCII"),
+                      "PARTIDO POPULAR|PARTIT POPULAR"))
+
+  message("Reading municipal ", years[i], " ...")
+
+  local_candidates[[i]] <- read_fwf(path_04, cols_04_local, locale = latin1,
+                                    col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    inner_join(parties, by = "party_code") |>
+    mutate(year = years[i])
+}
+
+municipal_pp <- bind_rows(local_candidates) |>
+  left_join(municipalities, by = c("province_code", "muni_code")) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c("municipal_", year, "_05"),
+    year          = as.integer(year),
+    chamber       = municipality,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = str_squish(full_name_cand),
+    sex           = recode(sex, "M" = "Male", "F" = "Female", .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation  = "PP",
+    level         = "Municipal"
+  ) |>
+  arrange(year, province, chamber, list_position)
+```
+
+```{r READ ALL CS MUNICIPAL CANDIDATES}
+municipal_cs <- read_excel(here("data", "raw", "candidates", "candidatos_municipales_cs.xlsx"))
+```
+
+```{r READ ALL RADICAL RIGHT MUNICIPAL CANDIDATES}
+radical_right_candidates <- bind_rows(radical_right_candidates,
+    read_excel(here("data", "raw", "candidates", "candidatos_partidos_historicos.xlsx"), sheet = "04 Municipales"),
+  read_excel(here("data", "raw", "candidates", "candidatos_partidos_historicos.xlsx"), sheet = "05 Cabildos insulares")
+) |>
+  mutate(person_id = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+```
+
+```{r JOIN GENERAL/AUTONOMICAL ELECTIONS AND AUTONOMICAL}
+pp_candidates <-
+  bind_rows(pp_candidates, municipal_pp)
+
+vox_candidates <-
+  bind_rows(vox_candidates, municipal_vox)
+
+cs_candidates <-
+  bind_rows(cs_candidates, municipal_cs)
+
+```
+
+```{r NORMALIZE NAMES AND ELECTION DATE}
+vox_candidates <- vox_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+pp_candidates <- pp_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+cs_candidates <- cs_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+radical_right_candidates <- radical_right_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+```
+
+
+```{r ABBREVIATIONS OF RADICAL RIGHT PARTIES}
+# one abbreviation per party (the printed ones vary: "DN", "D.N.", ...)
+party_abbreviations <- tribble(
+  ~party,                              ~prev_party,
+  "ADN (coalicion 2019)",              "ADÑ",
+  "Agrupacion Ruiz-Mateos",            "ARM",
+  "Alianza Nacional",                  "AN",
+  "Alternativa de Govern",             "AG",
+  "Alternativa Democrata Nacional",    "ADN",
+  "Alternativa Espanola",              "AES",
+  "Centro Democratico y Social",       "CDS",
+  "Comunion Tradicionalista Carlista", "CTC",
+  "Democracia Nacional",               "DN",
+  "Espana 2000",                       "E2000",
+  "FE de las JONS",                    "FE-JONS",
+  "Falange 2000",                      "FE-2000",
+  "Falange Autentica",                 "FA",
+  "Frente Nacional (2006)",            "FN",
+  "Fuerza Nueva",                      "FN",
+  "Grupo Independiente Liberal",       "GIL",
+  "Hacer Nacion",                      "HN",
+  "Juntas Espanolas",                  "JJEE",
+  "La Falange",                        "LF",
+  "Movimiento Social Republicano",     "MSR",
+  "Nosotros",                          "NOSOTROS",
+  "PADE",                              "PADE",
+  "Partido por la Libertad",           "PxL",
+  "Plataforma per Catalunya",          "PxC",
+  "Sociedad Civil y Democracia",       "SCD",
+  "Som Identitaris",                   "SOMI",
+  "Union del Pueblo Navarro",          "UPN",
+  "Via Democratica",                   "VD"
+)
+```
+
+
+# Objects for the next scripts
+
+```{r SAVE}
+# the objects the following scripts use
+dir.create(here("data", "processed"), showWarnings = FALSE, recursive = TRUE)
+save(list = c("autonomical_candidates", "candidates", "cs_candidates", "elections",
+     "party_abbreviations", "pp_candidates", "provinces", "radical_right_candidates",
+     "vox_candidates"),
+     file = here("data", "processed", "02_data_extraction.RData"))
+```

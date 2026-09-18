@@ -1,0 +1,722 @@
+---
+title: "01 · Context and theoretical framework"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Figures and tables of the theoretical framework: electoral systems in Europe, the far-right parties registered since 1976 and their family tree, the signatories and founders of Vox, and the replication of the political determinants of the vote for Vox (Rama et al., 2021, fig. 4.12) with CIS study 3269.
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+```
+
+# Charts of the theoretical framework
+
+
+```{r ELECTORAL SYSTEM MAP}
+electoral_system_database <-
+  read_excel(here("data", "raw", "idea_electoral_systems.xlsx")) |> 
+  group_by(ISO3) |> 
+   slice_max(Year) |> 
+  ungroup() |> 
+  select(ISO3, Country, Year,
+         family = `Electoral system family`,
+         system = `Electoral system for national legislature`)
+ 
+europe <- 
+  ne_countries(scale = "medium", continent = "Europe", returnclass = "sf") |>
+  left_join(electoral_system_database, by = c("iso_a3_eh" = "ISO3"))  # iso_a3 is -99 for France and Norway
+
+ggplot(europe) +
+  geom_sf(aes(fill = family), colour = "white", linewidth = 0.2) +
+  coord_sf(xlim = c(-25, 45), ylim = c(34, 72)) +
+  scale_fill_brewer(palette = "Set2", na.value = "grey90", name = "Electoral system family") +
+  labs(title = "Electoral systems in Europe",
+       caption = "Source: IDEA Electoral System Design Database") +
+  theme_void()
+
+```
+
+```{r share of each electoral family}
+europe |>
+  st_drop_geometry() |>
+  count(family) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  arrange(desc(n))
+```
+Maldita from Wayback Machine 
+https://maldita.es/malditodato/20240229/partidos-politicos-registro-ministerio-interior/
+https://files.maldita.es/uploads/2024/02/65df376828af1informefirma-1706550494955-pdf.pdf#toolbar=0
+
+```{r PARTY REGISTRY}
+party_registry_maldita <- read_csv(here("data", "raw", "party_registry", "party_registry_maldita_2024.csv"), show_col_types = FALSE)
+
+party_registry_2026 <- read_excel(here("data", "raw", "party_registry", "party_registry_2026_09.xlsx"), col_types = "text") |>
+  mutate(new_party = !is.na(registration_date),
+         party_id  = cumsum(new_party)) |>
+  group_by(party_id) |>
+  summarise(party             = str_squish(str_c(party, collapse = " ")),
+            address           = first(adress),
+            province          = first(province),
+            registration_date = first(registration_date),
+            .groups = "drop") |>
+  mutate(
+    party_name        = str_squish(str_remove(party, "\\(([^()]*)\\)$")),
+    abbreviation      = str_match(party, "\\(([^()]*)\\)$")[, 2],
+    town              = str_squish(str_remove(province, "\\(([^()]*)\\)$")),
+    province          = str_match(province, "\\(([^()]*)\\)$")[, 2],
+    registration_date = dmy(registration_date),
+    status            = "registered"
+  ) |>
+  select(party_name, abbreviation, registration_date, town, province, address, status)
+
+# parties registered after the 2024 list; some of them were already in it as "not registered"
+new_registrations <- party_registry_2026 |>
+  filter(registration_date > max(party_registry_maldita$registration_date, na.rm = TRUE))
+
+all_parties <- party_registry_maldita |>
+  left_join(new_registrations |>
+              select(party_name, new_date = registration_date, province, address),
+            by = "party_name") |>
+  mutate(registration_date = coalesce(registration_date, new_date),
+         status = if_else(!is.na(new_date) & status == "not registered", "registered", status)) |>
+  select(-new_date) |>
+  bind_rows(new_registrations |> anti_join(party_registry_maldita, by = "party_name")) |>
+  arrange(registration_date)
+```
+
+FE de las JONS aparece dos veces sin fecha de inscripción: protocolo 21 "(Novillo)" y 22 "(Zulueta)", que son las dos facciones que pidieron la inscripción en 1976. En cambio, party_register la da inscrita el 04/10/1976. Para la fecha de FE de las JONS usa esa.
+Alianza Popular (protocolo 961) sale sin fecha de inscripción. Es por cómo lo registra el Ministerio: el PP heredó la inscripción de AP.
+
+
+```{r TABLE OF FAR RIGHT PARTIES BEFORE VOX}
+casals_parties <- c(
+  "FUERZA NUEVA", "CENTRO DEMOCRATICO Y SOCIAL", "JUNTAS ESPAÑOLAS", "FRENTE NACIONAL",
+  "DEMOCRACIA NACIONAL", "MOVIMIENTO SOCIAL REPUBLICANO",
+  "PARTIDO DEL TRABAJO Y EMPLEO-AGRUPACION RUIZ MATEOS \"TRABAJO Y EMPLEO\"",
+  "GRUPO INDEPENDIENTE LIBERAL", "SOCIEDAD CIVIL Y DEMOCRACIA", "PLATAFORMA PER CATALUNYA", "ESPAÑA 2000",
+  "PARTIDO POR LA LIBERTAD", "ADÑ", "FALANGE ESPAÑOLA DE LAS J.O.N.S.", "LA FALANGE", "FALANGE ESPAÑOLA AUTENTICA",
+  "FALANGE AUTENTICA", "FALANGE 2.000", "\"NOSOTROS\" PARTIDO DE LA REGENERACIÓN SOCIAL",
+  "ALTERNATIVA ESPAÑOLA", "ALTERNATIVA DE GOVERN", "ALIANZA NACIONAL",
+  "SOBERANÍA Y LIBERTAD", "PUEBLO", "FRENTE: NACIONAL IDENTITARIO, PARTIDO NACIONALSOCIALISTA OBRERO ESPAÑOL",
+  "SOM IDENTITARIS",
+  # Via Democratica, split from PxC in 2010 (Casals); registered under its later name
+  "JUNTS PER TABARNIA - VIA DEMOCRÁTICA"
+)
+
+casals_registry <- bind_rows(all_parties, party_registry_2026) |>
+  filter(party_name %in% casals_parties, !is.na(registration_date)) |>
+  group_by(party_name) |>
+  slice_min(registration_date, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  select(party_name, abbreviation, registration_date, cancellation_date) |>
+  arrange(registration_date) |> 
+  mutate(party = party_name)
+
+far_right_table <- casals_registry |>
+  mutate(across(c(registration_date, cancellation_date), \(x) replace_na(format(x, "%d/%m/%Y"), "")),
+         abbreviation = replace_na(abbreviation, "")) |>
+  select(Party = party_name, Abbreviation = abbreviation,
+         Registered = registration_date, Cancelled = cancellation_date)
+
+stargazer(as.data.frame(far_right_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Far-right and right-wing populist parties since 1976",
+          notes = c("Source: Ministry of the Interior registry of political parties (Maldita 2024; update of September 2026).",
+                    "Parties selected following Casals (2020). Cancelled: date the party was struck off the registry."))
+```
+
+
+```{r FAMILY TREE FAR PARTIES 1977-2026}
+library(tidygraph)
+library(ggraph)
+
+# ---- 1. connections: `from` gave rise to `to` ------------------------------------------------------
+# type: "split / successor" = the new organisation comes out of the old one
+#       "coalition / merger" = the old one is part of a coalition, platform or merger
+#       "members / founders" = founders or members of the old one created or joined the new one
+far_right_links <- tribble(
+  ~from,                             ~to,                                ~type,                 ~year, ~source,
+  # Francoist dictatorship, mainstream right and Vox (Casals 2020)
+  "Francoist dictatorship",          "Alianza Popular",                  "members / founders",  1977L, "Casals (2020: 368)",
+  "Alianza Popular",                 "Partido Popular",                  "split / successor",   1989L, "Casals (2020: 368)",
+  "Partido Popular",                 "Vox",                              "split / successor",   2013L, "Casals (2020: 374, 379)",
+  "Sociedad Civil y Democracia",     "Vox",                              "members / founders",  2014L, "Casals (2020: 371)",
+  "Francoist dictatorship",          "Fuerza Nueva",                     "members / founders",  1976L, "Casals (2020: 366-367)",
+  "Fuerza Nueva",                    "Frente Nacional (1986)",           "split / successor",   1986L, "Casals (2020: 370)",
+  "Juntas Españolas",                "Alternativa Demócrata Nacional",   "coalition / merger",  1994L, "Casals (2020: 370)",
+  "Fuerza Nueva",                    "Alternativa Española",             "members / founders",  2003L, "Casals (2020: 379)",
+  "Partido Popular",                 "NOSOTROS",                         "members / founders",  2017L, "Ramos (2022: 165)",
+  # Falangism (Wikipedia: FE de las JONS (1976), FE Independiente, FE Auténtica, La Falange, Falange Auténtica)
+  "Francoist dictatorship",          "FE de las JONS",                   "members / founders",  1976L, "Wikipedia",
+  "Frente de Estudiantes Sindicalistas", "FE Independiente",             "split / successor",   1977L, "Wikipedia",
+  "FE de las JONS (Auténtica)",      "FE Auténtica",                     "split / successor",   1979L, "Wikipedia",
+  "FE Auténtica",                    "FE de las JONS",                   "members / founders",  1994L, "Wikipedia",
+  "FE de las JONS",                  "La Falange",                       "split / successor",   1999L, "Wikipedia",
+  "La Falange",                      "Falange Auténtica",                "split / successor",   2002L, "Wikipedia",
+  "FE Independiente",                "FE de las JONS",                   "coalition / merger",  2004L, "Wikipedia",
+  "Falange 2000",                    "FE de las JONS",                   "coalition / merger",  2004L, "Wikipedia",
+  "La Falange",                      "Frente Nacional (2006)",           "split / successor",   2005L, "Wikipedia",
+  "La Falange",                      "FE de las JONS",                   "coalition / merger",  2024L, "Wikipedia",
+  "FE de las JONS",                  "Comunidad Política Vértice",       "members / founders",  2018L, "Ramos (2022: 210)",
+  "Fuerza Nueva",                    "Frente de la Juventud",            "split / successor",   NA,    "Ramos (2022: 199)",
+  "Frente de la Juventud",           "ACIMJI",                           "members / founders",  2011L, "Ramos (2022: 199)",
+  # neo-Nazi and national-revolutionary (Ramos 2022)
+  "CEDADE",                          "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Acción Radical",                  "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Juntas Españolas",                "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Alternativa Demócrata Nacional",  "Democracia Nacional",              "split / successor",   1995L, "Ramos (2022: 126)",
+  "Democracia Nacional",             "Plataforma España 2000",           "coalition / merger",  2000L, "Ramos (2022: 127)",
+  "Plataforma España 2000",          "España 2000",                      "split / successor",   2002L, "Ramos (2022: 130)",
+  "FE-Frente Nacional Sindicalista", "España 2000",                      "members / founders",  2002L, "Ramos (2022: 130)",
+  "Alianza por la Unidad Nacional",  "Alianza Nacional",                 "members / founders",  2005L, "Ramos (2022: 148)",
+  "AC Rey Sisebuto",                 "Alianza Nacional",                 "members / founders",  2005L, "Ramos (2022: 148)",
+  "CEDADE",                          "Hermandad Aria",                   "split / successor",   1995L, "Ramos (2022: 106)",
+  "CEDADE",                          "Devenir Europeo",                  "members / founders",  2007L, "Ramos (2022: 212)",
+  "Alternativa Europea",             "Movimiento Social Republicano",    "split / successor",   1999L, "Ramos (2022: 237)",
+  "Movimiento Social Republicano",   "Soberanía y Libertad",             "split / successor",   2014L, "Ramos (2022: 240)",
+  "Soberanía y Libertad",            "Pueblo",                           "split / successor",   2018L, "Ramos (2022: 241)",
+  "Movimiento Social Republicano",   "Hogar Social Madrid",              "members / founders",  2014L, "Ramos (2022: 168)",
+  "REFNI",                           "FNI-PNSOE",                        "split / successor",   2020L, "Ramos (2022: 242)",
+  # coalitions and platforms (Ramos 2022)
+  "Democracia Nacional",             "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Alianza Nacional",                "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Nudo Patriota Español",           "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "La Falange",                      "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Movimiento Católico Español",     "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "FE de las JONS",                  "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "La Falange",                      "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "Democracia Nacional",             "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "Alternativa Española",            "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "España 2000",                     "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Plataforma per Catalunya",        "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Partido por la Libertad",         "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Iniciativa por Albacete",         "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145)",
+  # populist radical right in Catalonia (Ramos 2022)
+  "Fuerza Nueva",                    "Plataforma per Catalunya",         "members / founders",  2002L, "Ramos (2022: 238)",
+  "Plataforma Vigatana",             "Plataforma per Catalunya",         "split / successor",   2003L, "Ramos (2022: 238)",
+  "Plataforma per Catalunya",        "Vox",                              "members / founders",  2019L, "Ramos (2022: 243); Casals (2020: 373)",
+  "Plataforma per Catalunya",        "Som Catalans",                     "split / successor",   2014L, "Ramos (2022: 257)",
+  "Plataforma per Catalunya",        "Frente Nacional Identitario (Anglada)", "split / successor", 2015L, "Ramos (2022: 244)",
+  "Frente Nacional Identitario (Anglada)", "Som Identitaris",            "split / successor",   2016L, "Ramos (2022: 244)",
+  "Plataforma per Catalunya",        "Generación Identitaria",           "members / founders",  2016L, "Ramos (2022: 233)",
+  "Plataforma per Catalunya",        "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Movimiento Social Republicano",   "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Movimiento Patriótico Catalán",   "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Democracia Nacional",             "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Somatemps",                       "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Generación Identitaria",          "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Legión Urbana",                   "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Hermandad de Antiguos Caballeros Legionarios", "Legión Urbana",       "members / founders",  NA,    "Ramos (2022: 236)",
+  "Somatemps",                       "Tradició Catalana",                "members / founders",  2015L, "Ramos (2022: 247)",
+  "CEDADE",                          "Unitat Nacional Catalana",         "members / founders",  2000L, "Ramos (2022: 256)",
+  "Unitat Nacional Catalana",        "Moviment Identitari Català",       "members / founders",  2015L, "Ramos (2022: 255)",
+  # identitarian and neo-fascist groups (Ramos 2022)
+  "Iberia Cruor",                    "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "Acción Social Cádiz",             "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "El Galeón",                       "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "Málaga 1487",                     "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "España 2000",                     "Hacer Nación",                     "members / founders",  2020L, "Ramos (2022: 180)",
+  "Vox",                             "Hacer Nación",                     "members / founders",  2020L, "Ramos (2022: 180)",
+  "Lo Nuestro",                      "El Galeón",                        "split / successor",   2018L, "Ramos (2022: 188)",
+  # people who later joined Vox (Ramos 2022)
+  "España 2000",                     "Vox",                              "members / founders",  2019L, "Ramos (2022: 106, 159)",
+  "Hermandad Aria",                  "Vox",                              "members / founders",  2019L, "Ramos (2022: 106)",
+  "Acción Radical",                  "Vox",                              "members / founders",  2019L, "Ramos (2022: 106, 159)",
+  "Partido por la Libertad",         "Vox",                              "members / founders",  2019L, "Ramos (2022: 106)",
+  "Vox",                             "Regeneración",                     "split / successor",   2019L, "Ramos (2022: 159)",
+  "Regeneración",                    "Identitarios",                     "split / successor",   2019L, "Ramos (2022: 159)"
+)
+
+# ---- 2. nodes: family and founding year --------------------------------------------------------------------
+# documented = FALSE: the sources give no founding year, so `founded` is an approximate year of activity
+far_right_nodes <- tribble(
+  ~name,                                          ~family,                                ~founded, ~documented,
+  "Francoist dictatorship",                       "Francoist dictatorship",               1939L,     TRUE,
+  "Alianza Popular",                              "Mainstream right",                     1976L,     TRUE,
+  "Partido Popular",                              "Mainstream right",                     1989L,     TRUE,
+  "Sociedad Civil y Democracia",                  "Mainstream right",                     2011L,     TRUE,
+  "Vox",                                          "Vox",                                  2013L,     TRUE,
+  "Regeneración",                                 "Vox",                                  2019L,     TRUE,
+  "Identitarios",                                 "Vox",                                  2019L,     TRUE,
+  "NOSOTROS",                                     "Vox",                                  2017L,     TRUE,
+  "Fuerza Nueva",                                 "Neo-Francoism / national-Catholicism", 1976L,     TRUE,
+  "Frente Nacional (1986)",                       "Neo-Francoism / national-Catholicism", 1986L,     TRUE,
+  "Juntas Españolas",                             "Neo-Francoism / national-Catholicism", 1984L,     TRUE,
+  "Alternativa Española",                         "Neo-Francoism / national-Catholicism", 2003L,     TRUE,
+  "Alianza por la Unidad Nacional",               "Neo-Francoism / national-Catholicism", 1995L,     TRUE,
+  "Movimiento Católico Español",                  "Neo-Francoism / national-Catholicism", 1982L,     TRUE,
+  "Frente de la Juventud",                        "Neo-Francoism / national-Catholicism", 1980L,     FALSE,   # active in 1980-1981 (Ramos 2022: 199)
+  "ACIMJI",                                       "Neo-Francoism / national-Catholicism", 2011L,     TRUE,
+  "Nudo Patriota Español",                        "Neo-Francoism / national-Catholicism", 2011L,     FALSE,   # before La España en Marcha (2013)
+  "Somatemps",                                    "Neo-Francoism / national-Catholicism", 2013L,     TRUE,
+  "Tradició Catalana",                            "Neo-Francoism / national-Catholicism", 2015L,     TRUE,
+  "Legión Urbana",                                "Neo-Francoism / national-Catholicism", 2014L,     FALSE,   # before Por España Me Atrevo (2016)
+  "Hermandad de Antiguos Caballeros Legionarios", "Neo-Francoism / national-Catholicism", 1985L,     FALSE,   # active "for decades" (Ramos 2022: 239)
+  "Movimiento Patriótico Catalán",                "Neo-Francoism / national-Catholicism", 1994L,     FALSE,   # Wikidata
+  "FE de las JONS",                               "Falangism",                            1976L,     TRUE,
+  "FE Independiente",                             "Falangism",                            1977L,     TRUE,
+  "FE de las JONS (Auténtica)",                   "Falangism",                            1976L,     TRUE,
+  "FE Auténtica",                                 "Falangism",                            1979L,     TRUE,
+  "La Falange",                                   "Falangism",                            1999L,     TRUE,
+  "Falange Auténtica",                            "Falangism",                            2002L,     TRUE,
+  "Falange 2000",                                 "Falangism",                            2000L,     TRUE,
+  "Frente Nacional (2006)",                       "Falangism",                            2006L,     TRUE,
+  "Frente de Estudiantes Sindicalistas",          "Falangism",                            1963L,     TRUE,
+  "FE-Frente Nacional Sindicalista",              "Falangism",                            1996L,     TRUE,
+  "Comunidad Política Vértice",                   "Falangism",                            2018L,     TRUE,
+  "CEDADE",                                       "Neo-Nazi / national-revolutionary",    1966L,     TRUE,
+  "Acción Radical",                               "Neo-Nazi / national-revolutionary",    1990L,     FALSE,   # dismantled in 1993 (Ramos 2022: 229)
+  "Democracia Nacional",                          "Neo-Nazi / national-revolutionary",    1995L,     TRUE,
+  "Alternativa Demócrata Nacional",               "Neo-Nazi / national-revolutionary",    1994L,     TRUE,
+  "Alianza Nacional",                             "Neo-Nazi / national-revolutionary",    2005L,     TRUE,
+  "AC Rey Sisebuto",                              "Neo-Nazi / national-revolutionary",    2003L,     FALSE,   # before Alianza Nacional (2005)
+  "Hermandad Aria",                               "Neo-Nazi / national-revolutionary",    1995L,     TRUE,
+  "Devenir Europeo",                              "Neo-Nazi / national-revolutionary",    2007L,     TRUE,
+  "Alternativa Europea",                          "Neo-Nazi / national-revolutionary",    1994L,     FALSE,   # active in 1994 (Ramos 2022: 451)
+  "Movimiento Social Republicano",                "Neo-Nazi / national-revolutionary",    1999L,     TRUE,
+  "Soberanía y Libertad",                         "Neo-Nazi / national-revolutionary",    2014L,     TRUE,
+  "Pueblo",                                       "Neo-Nazi / national-revolutionary",    2018L,     TRUE,
+  "REFNI",                                        "Neo-Nazi / national-revolutionary",    2017L,     TRUE,
+  "FNI-PNSOE",                                    "Neo-Nazi / national-revolutionary",    2020L,     TRUE,
+  "Plataforma España 2000",                       "Populist radical right",               2000L,     TRUE,
+  "España 2000",                                  "Populist radical right",               2002L,     TRUE,
+  "Plataforma per Catalunya",                     "Populist radical right",               2002L,     TRUE,
+  "Plataforma Vigatana",                          "Populist radical right",               2002L,     TRUE,
+  "Partido por la Libertad",                      "Populist radical right",               2013L,     TRUE,
+  "Iniciativa por Albacete",                      "Populist radical right",               2015L,     FALSE,   # before Respeto (2016)
+  "Frente Nacional Identitario (Anglada)",        "Populist radical right",               2015L,     TRUE,
+  "Som Identitaris",                              "Populist radical right",               2016L,     TRUE,
+  "Casal Tramuntana",                             "Populist radical right",               2012L,     TRUE,
+  "Hacer Nación",                                 "Identitarian / neo-fascist groups",    2020L,     TRUE,
+  "Iberia Cruor",                                 "Identitarian / neo-fascist groups",    2008L,     TRUE,
+  "Acción Social Cádiz",                          "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "El Galeón",                                    "Identitarian / neo-fascist groups",    2018L,     TRUE,
+  "Málaga 1487",                                  "Identitarian / neo-fascist groups",    2013L,     TRUE,
+  "Lo Nuestro",                                   "Identitarian / neo-fascist groups",    2016L,     FALSE,   # before El Galeón (2018)
+  "Hogar Social Madrid",                          "Identitarian / neo-fascist groups",    2014L,     TRUE,
+  "Generación Identitaria",                       "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "Por España Me Atrevo",                         "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "Som Catalans",                                 "Catalan independentist far right",     2014L,     TRUE,
+  "Unitat Nacional Catalana",                     "Catalan independentist far right",     2000L,     TRUE,
+  "Moviment Identitari Català",                   "Catalan independentist far right",     2015L,     TRUE,
+  "La España en Marcha",                          "Coalitions",                           2013L,     TRUE,
+  "ADÑ",                                          "Coalitions",                           2018L,     TRUE,
+  "Respeto",                                      "Coalitions",                           2016L,     TRUE
+)
+
+# every organisation in the links needs a row in the nodes table (must return 0 rows)
+tibble(name = unique(c(far_right_links$from, far_right_links$to))) |>
+  anti_join(far_right_nodes, by = "name")
+
+# ---- 3. position of each node ----------------------------------------------------------------------------
+# x = founding year; y = one horizontal band per family
+family_order <- c("Francoist dictatorship", "Mainstream right", "Vox", "Coalitions", "Populist radical right",
+                  "Identitarian / neo-fascist groups", "Catalan independentist far right",
+                  "Neo-Nazi / national-revolutionary", "Neo-Francoism / national-Catholicism", "Falangism")
+
+far_right_nodes <- far_right_nodes |>
+  mutate(x    = pmax(founded, 1965L),               # the dictatorship (1939) is drawn at the left edge
+         band = match(family, family_order)) |>
+  group_by(family) |>
+  arrange(x, .by_group = TRUE) |>
+  mutate(y = band * 9 + (row_number() %% 5) * 1.6) |>   # stagger names inside each band
+  ungroup() |>
+  select(-band)
+
+far_right_graph <- tbl_graph(nodes = far_right_nodes, edges = far_right_links, directed = TRUE)
+
+# ---- 4. plot -----------------------------------------------------------------------------------------------
+family_colours <- c(
+  "Francoist dictatorship"               = "#3B3B3B",
+  "Mainstream right"                     = "#1F77B4",
+  "Vox"                                  = "#2CA02C",
+  "Coalitions"                           = "#7F7F7F",
+  "Populist radical right"               = "#FF7F0E",
+  "Identitarian / neo-fascist groups"    = "#9467BD",
+  "Catalan independentist far right"     = "#E6AB02",
+  "Neo-Nazi / national-revolutionary"    = "#000000",
+  "Neo-Francoism / national-Catholicism" = "#8C564B",
+  "Falangism"                            = "#D62728"
+)
+
+ggraph(far_right_graph, layout = "manual", x = x, y = y) +
+  geom_edge_arc(aes(colour = type), strength = 0.1,
+                arrow = arrow(length = unit(1.5, "mm"), type = "closed"),
+                end_cap = circle(2.2, "mm"), edge_width = 0.35, alpha = 0.55) +
+  geom_node_point(aes(colour = family, fill = if_else(documented, family, "approximate")),
+                  shape = 21, size = 3, stroke = 0.9) +
+  geom_node_text(aes(label = name, colour = family), size = 2.4, repel = TRUE, max.overlaps = Inf,
+                 segment.colour = "grey85", segment.size = 0.2, show.legend = FALSE) +
+  scale_colour_manual(values = family_colours, breaks = family_order, name = NULL) +
+  scale_fill_manual(values = c(family_colours, approximate = "white"), guide = "none") +
+  scale_edge_colour_manual(values = c("split / successor"  = "#D62728",
+                                      "coalition / merger" = "#1F77B4",
+                                      "members / founders" = "grey60"),
+                           name = NULL) +
+  scale_x_continuous(breaks = c(1965, seq(1975, 2025, 5)), labels = c("<1975", seq(1975, 2025, 5)),
+                     expand = expansion(add = 2)) +
+  scale_y_reverse() +
+  labs(title = "Family tree of the Spanish far right, 1975-2026",
+       subtitle = "Each arrow goes from an organisation to the one that came out of it, joined a coalition with it or supplied its members. Hollow dots: approximate year",
+       caption = "Sources: Ramos (2022), Casals (2020), Wikipedia (Falangist parties)",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_line(colour = "grey93"),
+        axis.text.y = element_blank(),
+        legend.position = "bottom", legend.box = "vertical",
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 9, colour = "grey35"))
+```
+
+
+https://web.archive.org/web/20140209110219/http://www.reconversion.es/
+
+```{r TABLE SIGNEES RECONVERSION.ES}
+
+signees_reconversion <- read_html("https://web.archive.org/web/20140202204018/http://www.reconversion.es/firmantes/") |>
+  html_text2() |>
+  str_split("\n") |>
+  unlist() |>
+  str_squish() |> 
+  keep(~ str_detect(.x, ",")) |>
+  keep(~ str_count(.x, ",") >= 1) |>
+  keep(~ str_length(.x) > 3) |> 
+  str_split_fixed(",", 2) |> 
+  as_tibble(.name_repair = "minimal") |> 
+  set_names(c("surname", "given_name")) |>
+  mutate(
+    surname = str_squish(surname),
+    given_name = str_squish(given_name),
+    name = paste(given_name, surname)
+  ) |>
+  select(name) |> 
+  slice(-c(1, n()))
+
+signees_reconversion
+```
+
+
+```{r TABLE OF VOX FOUNDERS}
+founders <- tribble(
+  ~name,                              ~relationship_with_vox,                                      ~origin,
+
+  "Alejo Vidal-Quadras",
+  "First party President and Candidate for the 2014 European elections",
+  "President of the Catalan branch of the PP, member of its national executive; Director of FAES, DENAES",
+
+  "Ana Velasco Vidal-Abarca",
+  "Militant",
+  "Villasneros Foundation",
+
+  "Cristina Seguí",
+  "Ex-militant",
+  "-",
+
+  "Enrique Álvarez López",
+  "Militant",
+  "-",
+
+  "Ignacio Camuñas Solís",
+  "Ex-Vice-President and ex-President",
+  "Co-founder and ex Minister of UCD",
+
+  "Iván Espinosa de los Monteros",
+  "Spokesman, former Vice-President, ex-General Secretariat",
+  "Ex-Secretary of DENAES",
+
+  "José Antonio Ortega Lara",
+  "Militant",
+  "Ex-militant of the PP",
+
+  "José Luis González Quirós",
+  "Second President (ad interim), ex-militant",
+  "UCD, CDS, ex-militant of PP, FAES",
+
+  "María Jesús Prieto-Laffargue",
+  "Ex-militant",
+  "General Direction in the first Aznar Government (PP)",
+
+  "Santiago Abascal",
+  "President",
+  "PP, President of DENAES"
+)
+
+founders_table <- founders |>
+  select(Name = name, `Relationship with Vox` = relationship_with_vox, Origin = origin)
+
+stargazer(as.data.frame(founders_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Founders of Vox",
+          notes = "Founding members of Vox and their relationship with the party.")
+```
+
+
+```{r RESULTS LINE CHART VOTES}
+# Vox's share of the valid vote and its seats in the Congress (Ministry of the Interior,
+# infoelectoral, data/raw/infoelectoral_results) and in the European Parliament
+# (official results of the Junta Electoral Central). In the Congress files the party names
+# are in row 2 or 3, the column labels in row 4 and the provinces from row 5; each party
+# has a "Votos" column followed by its "Diputados" column
+congress_results <- tribble(
+  ~file,                                                                  ~date,
+  here("data", "raw", "infoelectoral_results", "prov_02_201512_1.zip"),  ymd("2015-12-20"),
+  here("data", "raw", "infoelectoral_results", "prov_02_201606_1.zip"),  ymd("2016-06-26"),
+  here("data", "raw", "infoelectoral_results", "prov_02_201904_1.zip"),  ymd("2019-04-28"),
+  here("data", "raw", "infoelectoral_results", "prov_02_201911_1.zip"),  ymd("2019-11-10"),
+  here("data", "raw", "infoelectoral_results", "prov_02_202307_1.zip"),  ymd("2023-07-23")
+) |>
+  mutate(results = map(file, \(f) {
+    raw   <- read_excel(unzip(f, exdir = tempdir()), col_names = FALSE, col_types = "text",
+                        .name_repair = "minimal")
+    vox   <- which(unlist(raw[2, ]) == "VOX" | unlist(raw[3, ]) == "VOX")[1]
+    valid <- which(unlist(raw[4, ]) == "Votos válidos")
+    rows  <- which(str_detect(raw[[2]], "^[0-9]+$"))
+    tibble(votes = sum(as.numeric(raw[[vox]][rows]), na.rm = TRUE),
+           valid = sum(as.numeric(raw[[valid]][rows])),
+           seats = sum(as.numeric(raw[[vox + 1]][rows]), na.rm = TRUE))
+  })) |>
+  unnest(results) |>
+  mutate(chamber = "Congress of Deputies", vote_share = 100 * votes / valid) |>
+  select(chamber, date, vote_share, seats)
+
+european_results <- tribble(
+  ~date,             ~vote_share, ~seats,
+  ymd("2014-05-25"), 1.57,        0,
+  ymd("2019-05-26"), 6.21,        3,       # a fourth seat after Brexit (2020)
+  ymd("2024-06-09"), 9.63,        6
+) |>
+  mutate(chamber = "European Parliament")
+
+vox_vote <- bind_rows(congress_results, european_results)
+
+vox_vote |> mutate(vote_share = round(vote_share, 2))
+
+ggplot(vox_vote, aes(date, vote_share, colour = chamber, shape = chamber)) +
+  geom_vline(xintercept = ymd("2018-12-02"), linetype = "dashed", colour = "grey60") +
+  annotate("text", x = ymd("2018-12-02"), y = 16.5, label = "Andalusian election,\nDecember 2018",
+           hjust = 1.05, size = 3, colour = "grey40") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.5) +
+  ggrepel::geom_text_repel(aes(label = str_c(format(round(vote_share, 1), nsmall = 1), "%\n(", seats,
+                                             if_else(seats == 1, " seat)", " seats)"))),
+                           size = 3, lineheight = 0.9, nudge_y = 1.2, direction = "x",
+                           min.segment.length = 1, seed = 1, show.legend = FALSE) +
+  scale_colour_manual(values = c("Congress of Deputies" = "#1b7a3d", "European Parliament" = "grey45"),
+                      name = NULL) +
+  scale_shape_manual(values = c("Congress of Deputies" = 16, "European Parliament" = 17), name = NULL) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y",
+               limits = c(ymd("2014-01-01"), ymd("2025-01-01"))) +
+  scale_y_continuous(limits = c(0, 19), breaks = seq(0, 15, 5), labels = \(x) str_c(x, "%")) +
+  labs(x = NULL, y = "Share of the valid vote",
+       title = "Vox's vote in the general and European elections",
+       caption = "Source: Ministry of the Interior (infoelectoral) and Junta Electoral Central.") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+        plot.caption = element_text(hjust = 0, colour = "grey40"))
+```
+
+
+# Replication of Rama et al. (2021), figure 4.12
+
+```{r CIS 2019 POLITICAL DETERMINANTS OF VOX SUPPORT}
+library(haven)
+library(broom)
+
+# Figure 4.12 of the literature (average marginal effect of the political determinants of
+# the support for Vox) rebuilt with the microdata of the postelectoral survey of the general
+# election of November 2019: CIS, study 3269 (CIS 2019b)
+cis_file <- here("data", "raw", "cis_3269", "3269.sav")
+
+if (!file.exists(cis_file)) {
+  zip_file <- here("data", "raw", "cis_3269", "md3269.zip")
+  download.file("https://www.cis.es/documents/d/cis/MD3269", zip_file, mode = "wb",
+                method = "libcurl", headers = c("User-Agent" = "Mozilla/5.0"))
+  unzip(zip_file, exdir = here("data", "raw", "cis_3269"), junkpaths = TRUE)
+}
+
+cis_2019 <- read_sav(cis_file)
+
+# ---- 1. the variables of the figure ------------------------------------------------------
+# B22R      vote recalled in November 2019 (18 = VOX); blank, void, abstention and no answer out
+# C3        left-right self-placement, 1 (left) to 10 (right)
+# C12A      attendance at religious services: "frequent" is every Sunday or more often; the
+#           non-believers, who are not asked about it, do not attend
+# B1        interest in politics: "a lot" or "quite a lot"
+# B20       did what happened in Catalonia have an effect on your vote? (self-reported)
+# A9_1..3   the three most important problems of Spain: 18 immigration, 45 independence of
+#           Catalonia. The figure is reproduced with a problem named in any of the three
+#           answers; naming it first is the robustness check below
+# B30       national identity: "I feel only Spanish" is the exclusionary one
+# controls: sex, age, subjective class, education, household income, size of the
+#           municipality (the smaller, the more rural) and fixed effects of the autonomous
+#           community. Class, education and income keep a "N.C." level, so that the item
+#           non-response (40% of the income question) does not empty the sample, and the
+#           income brackets are grouped: with the raw ones nobody in the lowest voted VOX
+vox_support <- cis_2019 |>
+  mutate(vote                = as.numeric(B22R),
+         vox                 = as.integer(vote == 18),
+         left_right          = if_else(C3 <= 10, as.numeric(C3), NA),
+         church_attendance   = case_when(C12A %in% c(5, 6) ~ 1L, C12A == 9 ~ NA_integer_, TRUE ~ 0L),
+         political_interest  = case_when(B1 %in% c(1, 2) ~ 1L, B1 %in% c(3, 4) ~ 0L, TRUE ~ NA_integer_),
+         catalan_effect      = case_when(B20 == 1 ~ 1L, B20 == 2 ~ 0L, TRUE ~ NA_integer_),
+         problem_immigration = as.integer(A9_1 == 18 | A9_2 == 18 | A9_3 == 18) |> replace_na(0L),
+         problem_catalonia   = as.integer(A9_1 == 45 | A9_2 == 45 | A9_3 == 45) |> replace_na(0L),
+         first_immigration   = as.integer(A9_1 == 18),
+         first_catalonia     = as.integer(A9_1 == 45),
+         spanish_only        = case_when(B30 == 1 ~ 1L, B30 %in% c(2, 3, 4, 5, 7) ~ 0L, TRUE ~ NA_integer_),
+         female              = as.integer(C9 == 2),
+         age                 = as.numeric(C10),
+         class               = factor(if_else(CLASESUB %in% 1:5, as.character(CLASESUB), "N.C.")),
+         education           = factor(if_else(ESTUDIOS %in% 1:6, as.character(ESTUDIOS), "N.C.")),
+         income              = case_when(C19 %in% 1:4  ~ "1 up to 900",
+                                         C19 %in% 5:6  ~ "2 901-1800",
+                                         C19 %in% 7:8  ~ "3 1801-3000",
+                                         C19 %in% 9:11 ~ "4 over 3000",
+                                         TRUE          ~ "5 N.C.") |> factor(),
+         rurality            = 8 - as.numeric(TAMUNI),
+         ccaa                = factor(as.numeric(CCAA)),
+         weight              = as.numeric(PESO)) |>
+  filter(!is.na(vote), !vote %in% c(77, 96, 97, 98, 99)) |>
+  select(vox, left_right, church_attendance, political_interest, catalan_effect,
+         problem_immigration, problem_catalonia, first_immigration, first_catalonia,
+         spanish_only, female, age, class, education, income, rurality, ccaa, weight) |>
+  drop_na(vox, left_right, church_attendance, political_interest, catalan_effect,
+          problem_immigration, problem_catalonia, first_immigration, first_catalonia,
+          spanish_only, female, age, rurality)
+
+cat("voters:", nrow(vox_support), " VOX:", sum(vox_support$vox),
+    " share:", round(100 * mean(vox_support$vox), 1), "%\n")
+
+vox_support |>
+  summarise(n = n(),
+            across(c(left_right, church_attendance, political_interest, catalan_effect,
+                     problem_immigration, problem_catalonia, spanish_only), \(x) round(mean(x), 3)),
+            .by = vox)
+
+# ---- 2. logit of the vote for Vox ---------------------------------------------------------
+# the unweighted logit is the model of the figure; the other two are checks: the same model
+# with the weights of the survey, and with the problem named in the first place only
+vox_models <- list(
+  "1 Logit"          = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + problem_immigration + problem_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = binomial, data = vox_support),
+  "2 Weighted"       = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + problem_immigration + problem_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = quasibinomial, data = vox_support, weights = weight),
+  "3 First problem"  = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + first_immigration + first_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = binomial, data = vox_support)
+)
+
+tidy(vox_models[["1 Logit"]]) |>
+  filter(!str_detect(term, "^(ccaa|class|education|income)")) |>
+  mutate(odds_ratio = exp(estimate), across(where(is.numeric), \(x) signif(x, 3)))
+
+# the Basque Country has no VOX voter in the sample, so its fixed effect is separated and
+# its 110 respondents get a predicted probability of zero
+vox_support |> summarise(vox = sum(vox), n = n(), .by = ccaa) |> arrange(vox) |> head(3)
+
+# ---- 3. average marginal effects, in percentage points ------------------------------------
+# for the dummies, the average change of the predicted probability between 1 and 0; for the
+# left-right scale, the average slope of one point of the scale. The confidence intervals
+# are drawn from the coefficients (1000 draws of a normal with the estimated variance matrix)
+political_terms <- c("Left-right position"                          = "left_right",
+                     "(Frequent) church attendance"                 = "church_attendance",
+                     "Political interested"                         = "political_interest",
+                     "Catalan crisis had an effect (self-reported)" = "catalan_effect",
+                     "Most important problem = Immigration"         = "problem_immigration",
+                     "Most important problem = Catalan crisis"      = "problem_catalonia",
+                     "Exclusionary Spanish identity"                = "spanish_only")
+
+set.seed(20191110)
+margins <- list()
+for (m in names(vox_models)) {
+  design <- model.matrix(vox_models[[m]])
+  beta   <- coef(vox_models[[m]])
+  draws  <- t(MASS::mvrnorm(1000, beta, vcov(vox_models[[m]])))
+
+  for (label in names(political_terms)) {
+    v <- political_terms[[label]]
+    if (m == "3 First problem") v <- str_replace(v, "^problem", "first")
+    if (v == "left_right") {                      # continuous: the average derivative
+      effects <- colMeans(dlogis(design %*% draws) * rep(draws[v, ], each = nrow(design)))
+      point   <- mean(dlogis(design %*% beta) * beta[[v]])
+    } else {                                      # dummy: the average discrete change
+      design1 <- design; design1[, v] <- 1
+      design0 <- design; design0[, v] <- 0
+      effects <- colMeans(plogis(design1 %*% draws) - plogis(design0 %*% draws))
+      point   <- mean(plogis(design1 %*% beta) - plogis(design0 %*% beta))
+    }
+    margins[[str_c(m, label)]] <- tibble(model = m, term = label,
+                                         ame       = 100 * point,
+                                         conf_low  = 100 * quantile(effects, 0.025),
+                                         conf_high = 100 * quantile(effects, 0.975))
+  }
+}
+margins <- bind_rows(margins) |>
+  mutate(term = factor(term, levels = rev(names(political_terms))))
+
+margins |>
+  mutate(across(c(ame, conf_low, conf_high), \(x) round(x, 2))) |>
+  arrange(model, desc(term)) |>
+  print(n = Inf)
+
+# ---- 4. the figure ------------------------------------------------------------------------
+ggplot(filter(margins, model == "1 Logit"), aes(ame, term)) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey75", linewidth = 1.2) +
+  geom_linerange(aes(xmin = conf_low, xmax = conf_high), colour = "grey35") +
+  geom_point(size = 2.2, colour = "grey20") +
+  geom_text(aes(label = str_replace(as.character(signif(ame, 2)), "^(-?)0", "\\1")),
+            vjust = -1.1, size = 3, family = "serif") +
+  scale_x_continuous(limits = c(-5, 15), breaks = seq(-5, 15, 5)) +
+  labs(x = NULL, y = NULL,
+       title = "Political determinants of support for VOX",
+       caption = str_c("Confidence intervals (95%) | Controls not illustrated: gender, age, ",
+                       "class (self-reported), education, income, rurality, CCAA fixed effects\n",
+                       "Average marginal effects on the probability of voting VOX, in percentage ",
+                       "points. Own elaboration with CIS study 3269 (2019b), n = ", nrow(vox_support))) +
+  theme_minimal(base_size = 11, base_family = "serif") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12),
+        plot.caption = element_text(hjust = 0, size = 7, colour = "grey30"),
+        panel.grid = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted", colour = "grey80"),
+        axis.line.x = element_line(colour = "grey40"),
+        axis.ticks.x = element_line(colour = "grey40"),
+        plot.margin = margin(10, 20, 10, 10))
+```
+
+
+# Objects for the next scripts
+
+```{r SAVE}
+# the objects the following scripts use
+dir.create(here("data", "processed"), showWarnings = FALSE, recursive = TRUE)
+save(list = c("family_colours", "family_order", "founders", "signees_reconversion"),
+     file = here("data", "processed", "01_context.RData"))
+```

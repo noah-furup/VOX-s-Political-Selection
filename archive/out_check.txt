@@ -1,0 +1,55 @@
+total: 54
+1 | ALEJO VIDAL-QUADRAS ROCA | QID: NA | FUENTE: Wikidata | tiene_profesion: True
+2 | IVAN ESPINOSA DE LOS MONTEROS DE SIMON | QID: Q61481949 | FUENTE: Wikidata | tiene_profesion: True
+3 | ANA VELASCO VIDAL-ABARCA | QID: NA | FUENTE: NA | tiene_profesion: True
+4 | JOSE LUIS GONZALEZ QUIROS | QID: Q5941372 | FUENTE: Wikidata | tiene_profesion: True
+5 | CRISTINA SEGUI GARCIA | QID: Q61472968 | FUENTE: Wikidata | tiene_profesion: True
+6 | MARIA JESUS PRIETO LAFFARGUE | QID: Q97728778 | FUENTE: Wikidata | tiene_profesion: True
+7 | ARIADNA HERNANDEZ TORRIJOS | QID: Q110803785 | FUENTE: Wikidata | https://revistaelobservador.com/sociedad/9673-juan-cassa-candidato-de-ciudadanos-c-s-a-la-alcaldia-de-malaga-fue-miembro-del-consejo-de-direccion-del-partido-de-mario-conde-scd-comenzo-a-simpatizar-con-c-s-al-poco-de-ser-elegido-en-la-otra-formacion-politic | tiene_profesion: True
+8 | EDUARDO GUTIERREZ DE CABIEDES HIDALGO DE CAVIEDES | QID: NA | FUENTE: https://www.noticiasdenavarra.com/elecciones-generales/2023/07/18/eduardo-gutierrez-cabiedes-deje-militante-7061426.html | tiene_profesion: False
+9 | JOSE LUIS SANCHEZ SANCHEZ | QID: NA | FUENTE: https://www.europapress.es/madrid/noticia-economista-jose-luis-sanchez-gana-primarias-vox-madrid-20141027184410.html | tiene_profesion: True
+10 | ANTONIO DE LA TORRE LUQUE | QID: NA | FUENTE: https://www.linkedin.com/in/antonio-de-la-torre-luque-61aa6741/details/experience/ | tiene_profesion: True
+11 | MANUEL MARIA LOPEZ-LINARES ALBERDI | QID: NA | FUENTE: https://web.comillas.edu/profesor/mmlopezlinares | tiene_profesion: True
+12 | JESUS JAVIER PEREZ SANCHEZ | QID: Q44522501 | FUENTE: https://elpais.com/diario/2000/01/08/espana/947286010_850215.html | http://jesusperezabogado.es/ | tiene_profesion: True
+13 | MAZALY AGUILAR | QID: Q63932525 | FUENTE: Wikidata | tiene_profesion: True
+14 | LAURA RODRIGUEZ SOLER | QID: NA | FUENTE: https://www.linkedin.com/in/laura-rodr%C3%ADguez-soler-77835b27/ | tiene_profesion: True
+15 | FRANCISCO DE ASIS DE RIBERA MARTIN | QID: NA | FUENTE: NA | tiene_profesion: False
+16 | JUAN ANTONIO MALDONADO CASTILLO | QID: NA | FUENTE: NA | tiene_profesion: False
+17 | MONTSERRAT AMAT ORTEGA | QID: NA | FUENTE: NA | tiene_profesion: False
+18 | JAVIER CORTES LUCENA | QID: NA | FUENTE: https://www.voxespana.es/noticias/javier-cortes-lucena-nuevo-presidente-del-comite-ejecutivo-provincial-de-vox-sevilla-20201005?provincia=sevilla | tiene_profesion: True
+19 | GUNTHER ANTONIO ZEVALLOS AVILES | QID: NA | FUENTE: NA | tiene_profesion: False
+20 | MARIA JESUS GONZALEZ FUEYO | QID: NA | FUENTE: NA | tiene_profesion: False
+21 | AURORA PIMENTEL IGEA | QID: NA | FUENTE: NA | tiene_profesion: False
+22 | SERGIO GARCIA-ORCOYEN TORMO | QID: NA | FUENTE: NA | tiene_profesion: False
+23 | ANTONIO ESCUDERO COLL | QID: NA | FUENTE: NA | tiene_profesion: False
+24 | CRISTINA PELAEZ IZQUIERDO | QID: NA | FUENTE: NA | tiene_profesion: False
+25 | GONZALO ALTOZANO GARCIA-FIGUERAS | QID: NA | FUENTE: NA | tiene_profesion: False
+26 | ANA ELGARRESTA BENAVIDES | QID: NA | FUENTE: NA | tiene_profesion: False
+27 | GONZALO NIEDERLEYTNER GARCIA-LLIBEROS | QID: NA | FUENTE: NA | tiene_profesion: False
+28 | ALEJANDRO DE ANTA PUIG | QID: NA | FUENTE: NA | tiene_profesion: False
+29 | SANTIAGO HERNANDEZ DE ANDRES | QID: NA | FUENTE: NA | tiene_profesion: False
+30 | LETICIA DIAZ-MECO ALVAREZ | QID: NA | FUENTE: NA | tiene_profesion: False
+31 | EDUARDO BUXADERAS SANCHEZ | QID: NA | FUENTE: NA | tiene_profesion: False
+32 | FRANCISCO JAVIER FERNANDEZ TARRIO | QID: Q20533155 | FUENTE: Wikidata | tiene_profesion: True
+33 | ANA MARIA VELASCO PLAZA | QID: NA | FUENTE: NA | tiene_profesion: False
+34 | MARIA DEL MAR RUBIO CONTRERAS | QID: NA | FUENTE: NA | tiene_profesion: False
+35 | VICTOR GONZALEZ COELLO DE PORTUGAL | QID: Q74579135 | FUENTE: Wikidata | tiene_profesion: True
+36 | JOAQUIN JAVALOYS GARCIA | QID: NA | FUENTE: NA | tiene_profesion: False
+37 | RICARDO GARRUDO CAYON | QID: NA | FUENTE: NA | tiene_profesion: False
+38 | JOSE LUIS GONZALEZ VALVERDE | QID: NA | FUENTE: NA | tiene_profesion: False
+39 | MARGARITA SUAREZ DE LEZO ESPINOS | QID: NA | FUENTE: NA | tiene_profesion: False
+40 | PALOMA GONZALEZ LOCHE | QID: NA | FUENTE: NA | tiene_profesion: False
+41 | PEDRO JOSE RICO DE LA ROSA | QID: NA | FUENTE: NA | tiene_profesion: False
+42 | MARIA ADELA CUCHI LLEDO | QID: NA | FUENTE: NA | tiene_profesion: False
+43 | ADRIAN ARSUAGA LABORDE | QID: NA | FUENTE: NA | tiene_profesion: False
+44 | ISABEL RUIZ RESINO | QID: NA | FUENTE: NA | tiene_profesion: False
+45 | ANDRES PORTA MONEDERO | QID: NA | FUENTE: NA | tiene_profesion: False
+46 | LUCIA PASTOR RUBIN DE CELIS | QID: NA | FUENTE: NA | tiene_profesion: False
+47 | PABLO BARRANCO SCHNITZLER | QID: Q110808801 | FUENTE: Wikidata | tiene_profesion: True
+48 | YOLANDA ALMAGRO ALCANTARA | QID: NA | FUENTE: NA | tiene_profesion: False
+49 | ALFREDO SERRANO MORA | QID: NA | FUENTE: NA | tiene_profesion: False
+50 | RAMON PERALTA MARTINEZ | QID: NA | FUENTE: NA | tiene_profesion: False
+51 | MARIA JOSE SUAREZ PICAZO | QID: NA | FUENTE: NA | tiene_profesion: False
+52 | MATILDE LATORRE SANZ | QID: NA | FUENTE: NA | tiene_profesion: False
+53 | SANTIAGO ABASCAL CONDE | QID: Q11703587 | FUENTE: Wikidata | tiene_profesion: True
+54 | JOSE ANTONIO ORTEGA LARA | QID: Q5938011 | FUENTE: Wikidata | tiene_profesion: True

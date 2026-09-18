@@ -1,0 +1,72 @@
+candidato_norm: EDUARDO GUTIERREZ DE CABIEDES HIDALGO DE CAVIEDES
+QID: NA
+ANO_NACIMIENTO: NA
+LUGAR_NACIMIENTO: NA
+PROFESION: NA
+PARTIDO_ANTERIOR: Union del Pueblo Navarro | Partido Popular
+ESTUDIOS: NA
+UNIVERSIDAD: NA
+CARGO_POLITICO_ANTERIOR: NA
+sexo: Hombre
+FUENTE: https://www.noticiasdenavarra.com/elecciones-generales/2023/07/18/eduardo-gutierrez-cabiedes-deje-militante-7061426.html
+---
+candidato_norm: JOSE LUIS SANCHEZ SANCHEZ
+QID: NA
+ANO_NACIMIENTO: 1970
+LUGAR_NACIMIENTO: NA
+PROFESION: Economista | empresario
+PARTIDO_ANTERIOR: Sociedad Civil y Democracia
+ESTUDIOS: Ciencias Económicas
+UNIVERSIDAD: CEU | Providence College
+CARGO_POLITICO_ANTERIOR: NA
+sexo: Hombre
+FUENTE: https://www.europapress.es/madrid/noticia-economista-jose-luis-sanchez-gana-primarias-vox-madrid-20141027184410.html
+---
+candidato_norm: ANTONIO DE LA TORRE LUQUE
+QID: NA
+ANO_NACIMIENTO: 1949
+LUGAR_NACIMIENTO: Córdoba
+PROFESION: Geologo | ejecutivo industrial
+PARTIDO_ANTERIOR: NA
+ESTUDIOS: Ciencias Geológicas 
+UNIVERSIDAD: NA
+CARGO_POLITICO_ANTERIOR: NA
+sexo: Hombre
+FUENTE: https://www.linkedin.com/in/antonio-de-la-torre-luque-61aa6741/details/experience/
+---
+candidato_norm: MANUEL MARIA LOPEZ-LINARES ALBERDI
+QID: NA
+ANO_NACIMIENTO: NA
+LUGAR_NACIMIENTO: NA
+PROFESION: Profesor universitario | analista financiero | funcionario interino en la UE
+PARTIDO_ANTERIOR: 
+ESTUDIOS: Economía y Empresa | Ciencias Políticas | Doctorado en Economía y Relaciones Internacionales
+UNIVERSIDAD: Universidad de Georgetown | Universidad Nacional de Educacion a Distancia | Universidad Autonoma de Madrid
+CARGO_POLITICO_ANTERIOR: NA
+sexo: Hombre
+FUENTE: https://web.comillas.edu/profesor/mmlopezlinares
+---
+candidato_norm: LAURA RODRIGUEZ SOLER
+QID: NA
+ANO_NACIMIENTO: NA
+LUGAR_NACIMIENTO: NA
+PROFESION: Funcionario en el Tribunal de Cuentas | Contable
+PARTIDO_ANTERIOR: NA
+ESTUDIOS: Ciencias Económicas
+UNIVERSIDAD: CUNEF
+CARGO_POLITICO_ANTERIOR: Tesorera de Vox
+sexo: Mujer
+FUENTE: https://www.linkedin.com/in/laura-rodr%C3%ADguez-soler-77835b27/
+---
+candidato_norm: JAVIER CORTES LUCENA
+QID: NA
+ANO_NACIMIENTO: NA
+LUGAR_NACIMIENTO: NA
+PROFESION: Economista
+PARTIDO_ANTERIOR: NA
+ESTUDIOS: NA
+UNIVERSIDAD: NA
+CARGO_POLITICO_ANTERIOR: Presidente del Comité Ejecutivo Provincial de VOX Sevilla (desde febrero 2020) | fundador del partido en la provincia
+sexo: Hombre
+FUENTE: https://www.voxespana.es/noticias/javier-cortes-lucena-nuevo-presidente-del-comite-ejecutivo-provincial-de-vox-sevilla-20201005?provincia=sevilla
+---

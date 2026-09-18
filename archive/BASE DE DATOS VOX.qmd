@@ -1,0 +1,1223 @@
+---
+title: "base de datos"
+format: html
+editor: visual
+---
+
+```{r warning=FALSE}
+library(readr)
+library(tidyverse)
+```
+
+```{r}
+diputados_xiii <- read_csv2("diputados_xiii.csv") |> # Filtered CSV
+  select(-Estado) |>
+  rename_with(toupper) |>
+  rename(FORMACIONELECTORAL = FORMACION) |>
+  mutate(LEGISLATURA = "XIII")
+  
+
+diputados_xiv <- read_csv2("diputados_xiv.csv") |> 
+  filter(FORMACIONELECTORAL == "Vox") |> 
+  mutate(LEGISLATURA = "XIV")
+
+diputados_xv <- read.csv2("diputados_activos.csv") |> 
+  filter(FORMACIONELECTORAL == "VOX") |> 
+  mutate(LEGISLATURA = "XV")
+
+carla_toscano <- diputados_xiv |>
+  filter(NOMBRE == "Toscano de Balbín, Carla") |>
+  slice(1) |>  # por si hay más de una, coge solo la primera
+  mutate(FECHAALTA = "17/08/2023",
+         FECHABAJA = "11/01/2024",
+         LEGISLATURA = "XV")
+
+diputados_xv <- bind_rows(diputados_xv, carla_toscano)
+
+diputados_vox <- bind_rows(diputados_xiii, diputados_xiv, diputados_xv) |> 
+  select(-c(FECHAALTAENGRUPOPARLAMENTARIO, FECHABAJAENGRUPOPARLAMENTARIO, FECHACONDICIONPLENA, FORMACIONELECTORAL))
+
+diputados_vox_distinct <- diputados_vox |> 
+  distinct(NOMBRE)
+```
+
+```{r Diputados que solo han estado en una legislatura}
+
+diputados_vox |>
+  group_by(NOMBRE) |> 
+  summarise(n_legislaturas = n_distinct(LEGISLATURA),
+            legislaturas = paste(sort(unique(LEGISLATURA)), collapse = ", ")) |>
+  filter(n_legislaturas < 2) |>
+  arrange(desc(n_legislaturas))
+```
+
+METER DUMMY VARIABLE DE QUIENES HAN DIMITIDO
+
+```{r}
+diputados_madrid_xi <- read_csv("diputados_madrid_xi.csv") |> 
+  filter(!str_detect(Nombre, "Legislatura")) |>
+  # Todos la misma fecha por disolución de la cámara de Ayuso,
+  # si no, mucho trabajo por estupidez administrativa
+  mutate(NOMBRE = paste0(`Primer Apellido`, " ", `Segundo Apellido`, ", ", Nombre),
+         FECHAALTA = "11/06/2019",
+         FECHABAJA = "11/03/2021") |> 
+  select(-Nombre, -`Primer Apellido`, -`Segundo Apellido`) |>
+  rename_with(toupper)
+
+diputados_madrid_xii <- read_csv("diputados_madrid_xii.csv") |> 
+  filter(!str_detect(Nombre, "Legislatura")) |>
+  mutate(NOMBRE = paste0(`Primer Apellido`, " ", `Segundo Apellido`, ", ", Nombre),
+         FECHAALTA = "08/06/2021",
+         FECHABAJA = "28/05/2023") |>
+  select(-Nombre, -`Primer Apellido`, -`Segundo Apellido`) |>
+  rename_with(toupper)
+
+diputados_madrid_xiii <- read_csv("diputados_madrid_xiii.csv") |> 
+  filter(!str_detect(Nombre, "Legislatura")) |>
+  mutate(
+    NOMBRE = paste0(`Primer Apellido`, " ", `Segundo Apellido`, ", ", Nombre),
+    FECHAALTA = case_when(
+      NOMBRE == "Barrero Alba, Raquel"   ~ "17/10/2024",
+      NOMBRE == "Pérez Gallardo, Javier" ~ "01/02/2024",
+      NOMBRE == "Tejero Oller, Beatriz"  ~ "05/02/2026",
+      .default = "13/06/2023"
+    ),
+    FECHABAJA = case_when(
+      NOMBRE == "Calabuig Martínez, Mariano"   ~ "30/01/2026",
+      NOMBRE == "Monasterio San Martín, Rocío" ~ "10/10/2024",
+      NOMBRE == "Ruiz Bartolomé, José Luis"    ~ "25/01/2024",
+      .default = NA_character_
+    )
+  ) |>
+  select(-Nombre, -`Primer Apellido`, -`Segundo Apellido`) |>
+  rename_with(toupper)
+
+diputados_comunidad_de_madrid <- bind_rows(diputados_madrid_xi, diputados_madrid_xii, diputados_madrid_xiii)
+```
+
+```{r}
+library(rvest)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tibble)
+library(selenium)
+
+
+library(rvest)
+library(dplyr)
+library(stringr)
+library(tibble)
+
+
+
+
+
+# Extraer todos los <a> dentro de elementos con clase "card-text"
+
+
+diputados_andalucia_XI <- tibble(
+  NOMBRE = 
+    read_html("https://www.parlamentodeandalucia.es/webdinamica/portal-web-parlamento/composicionyfuncionamiento/memoriadecomposiciones.do?modo=confoto&legislatura=11&seleccion=diputadosydiputadas&organo=1001&subsubseleccion=364&subseleccion=grupo&grupo=456&accion=Ver+resultados") |>
+    html_elements(".card-text a") |> 
+    html_text2() |> 
+    str_remove_all("\\s*\\(.*?\\)")) |> 
+   distinct(NOMBRE)
+
+diputados_andalucia <- diputados_andalucia_XI |>
+  mutate(FECHAALTA = if_else(NOMBRE == "Valpuesta Bermúdez, Macario",
+                             "01/09/2020", "27/12/2018"),
+         FECHABAJA = if_else(NOMBRE == "Serrano Castro, Francisco de Asís",
+                             "01/07/2020", "26/04/2022"),
+         LEGISLATURA = "XI")
+# diputados_andalucia_XII <- tibble(
+#   NOMBRE = 
+#     read_html("https://www.parlamentodeandalucia.es/webdinamica/portal-web-parlamento/composicionyfuncionamiento/memoriadecomposiciones.do?modo=confoto&legislatura=12&seleccion=diputadosydiputadas&organo=1001&subsubseleccion=364&subseleccion=grupo&grupo=456&accion=Ver+resultados") |>
+#     html_elements(".card-text a") |> 
+#     html_text2() |> 
+#     str_remove_all("\\s*\\(.*?\\)")) |> 
+#    distinct(NOMBRE)
+# 
+# diputados_andalucia_XII
+
+#ME DA ERROR
+
+
+```
+
+```{r}
+library(rvest)
+library(dplyr)
+library(stringr)
+library(tibble)
+
+diputados_aragon_xi <- tibble(
+  NOMBRE = read_html("https://www.cortesaragon.es/Anteriores-legislaturas.2357.0.html?&no_cache=1&tx_t3comunicacion_pi3%5Bnumleg%5D=11&tx_t3comunicacion_pi3%5Btipinf%5D=1&tx_t3comunicacion_pi3%5Buidgru%5D=106#verContenido") |>
+    html_elements("h4[style='font-size: 1.2em'] a") |>
+    html_text2()) |> 
+  mutate(
+    nombre_limpio = str_squish(NOMBRE),
+    partes        = str_split(nombre_limpio, " "),
+    n_palabras    = lengths(partes),
+    apellidos     = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres       = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE        = paste0(apellidos, ", ", nombres),
+    FECHAALTA     = "23/06/2023",
+    FECHABAJA     = "02/03/2026",
+    LEGISLATURA   = "XI"
+  ) |>
+  select(NOMBRE, FECHAALTA, FECHABAJA, LEGISLATURA)
+
+diputados_aragon_xii <- tibble(
+  NOMBRE = read_html("https://www.cortesaragon.es/Quienes-somos.2250.0.html?&no_cache=1&tx_t3comunicacion_pi3%5Bnumleg%5D=12&tx_t3comunicacion_pi3%5Btipinf%5D=1&tx_t3comunicacion_pi3%5Buidgru%5D=116#verContenido") |>
+    html_elements("h4[style='font-size: 1.2em'] a") |>
+    html_text2()) |> 
+  mutate(
+    nombre_limpio = str_squish(NOMBRE),
+    partes        = str_split(nombre_limpio, " "),
+    n_palabras    = lengths(partes),
+    apellidos     = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres       = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE        = paste0(apellidos, ", ", nombres),
+    FECHAALTA     = "03/03/2026",
+    FECHABAJA     = NA_character_,
+    LEGISLATURA   = "XII"
+  ) |>
+  select(NOMBRE, FECHAALTA, FECHABAJA, LEGISLATURA)
+
+diputados_aragon <- rbind(diputados_aragon_xi, diputados_aragon_xii)
+
+```
+
+```{r}
+diputados_asturias_XI <- tibble(NOMBRE = 
+                                  c("Jové Sandoval, Javier", "Blanco Urizar, Ignacio", 
+                                    "Álvarez Rouco, Sara Concepción"),
+                                FECHAALTA = c("14/02/2023", "12/07/2019", 
+                                              "12/07/2019"),
+                                FECHABAJA = c("26/06/2023", "30/12/2022", "26/06/2023"),
+                                LEGISLATURA = "XI")
+
+
+diputados_asturias_XII <- tibble(NOMBRE = 
+                                  c("Jové Sandoval, Javier", "López Fernández, Carolina",  
+                                    "Álvarez Rouco, Sara Concepción", "Centeno Martín, Gonzalo"),
+                                FECHAALTA = "26/06/2023",
+                                FECHABAJA = NA_character_,
+                                LEGISLATURA = "XII")
+diputados_asturias <- rbind(diputados_asturias_XI, diputados_asturias_XII)
+
+diputados_asturias
+```
+
+https://www.jgpa.es/documents/11156/104641/Relaci%C3%B3n+general+de+Parlamentarios.pdf/eaa674bd-e5a7-437e-8cb9-e459925305c1
+
+```{r}
+# Islas baleares, no va la pagina
+```
+
+```{r}
+diputados_canarias <- tibble(NOMBRE = 
+                                  c("Galván Sasia, Nicasio Jesús", "Nieto Fernández, Javier", 
+                                    "Jover Linares, Paula", "Gómez Gómez, Marta"),
+                                FECHAALTA = "30/06/2023",
+                                FECHABAJA = if_else(NOMBRE == "Gómez Gómez, Marta", 
+                             "25/09/2024", NA_character_), # Baja solo del partido, no se ha ido del parlamento
+                                LEGISLATURA = "XI")
+diputados_canarias
+```
+
+```{r}
+diputados_cantabria_xi <- tibble(NOMBRE = 
+                                  c("Pérez Salazar, Natividad", "Palacio Ruiz, Cristóbal", 
+                                    "Diaz Rodríguez, Leticia", "Blanco Torcal, Armando Antonio"),
+                                FECHAALTA = "29/05/2023",
+                                FECHABAJA = if_else(NOMBRE == "Palacio Ruiz, Cristóbal", 
+                             "01/11/2024", NA_character_), # Baja solo del partido, no se ha ido del parlamento
+                                LEGISLATURA = "XI")
+diputados_cantabria_x <- tibble(NOMBRE = 
+                                  c("Palacio Ruiz, Cristóbal", "Blanco Torcal, Armando Antonio"),
+                                FECHAALTA = "20/06/2019",
+                                FECHABAJA = "04/04/2023",
+                                LEGISLATURA = "X")
+
+diputados_cantabria <- rbind(diputados_cantabria_x, diputados_cantabria_xi)
+```
+
+https://parlamento-cantabria.es/sites/default/files/5.%20Diputados%20y%20Mesas%20por%20Legislaturas_0.pdf
+
+```{r}
+diputados_la_mancha <- tibble(NOMBRE = 
+                                  c("Moreno Ramos, David", "Sánchez Serrano, Iván", 
+                                    "Blázquez García-Valenzuela, Luis Juan", 
+                                    "Cobo Navarro, Francisco José"),
+                                FECHAALTA = "22/06/2023",
+                                FECHABAJA = NA_character_,
+                                LEGISLATURA = "XI")
+```
+
+```{r}
+diputados_castilla_leon_x <- tibble(NOMBRE = 
+                                  c("García-Conde del Castillo, Jesus María",
+                                    "Pinacho Fernández, María de Fátima"),
+                                FECHAALTA = c("21/06/2019", "09/06/2021"),
+                                FECHABAJA = c("01/02/2021", "10/03/2022"),
+                                LEGISLATURA = "X")
+
+library(pdftools)
+library(stringr)
+library(dplyr)
+library(tibble)
+
+resultados_xi_castilla_leon <- pdf_text("Diputados legislatura XI castilla y leon.pdf") |> paste(collapse = "\n")
+lineas <- str_split(resultados_xi_castilla_leon, "\n")[[1]] |> str_squish() |> discard(~ .x == "")
+
+diputados_castilla_leon_xi <- lineas |>
+  keep(~ str_detect(.x, "(VOX)")) |>
+  str_remove_all("(?i)vox") |>
+  str_squish() |>
+  as_tibble_col(column_name = "NOMBRE") |> 
+  slice(-(1:2))
+
+diputados_castilla_leon_xi <- diputados_castilla_leon_xi |> 
+  mutate(
+    NOMBRE = str_remove_all(NOMBRE, "(?i)^(don|doña)\\s*"),
+    NOMBRE = str_remove_all(NOMBRE, "\\(\\)"),
+    NOMBRE = str_squish(NOMBRE),
+    NOMBRE = str_to_title(NOMBRE),
+    partes     = str_split(NOMBRE, " "),
+    n_palabras = lengths(partes),
+    apellidos  = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres    = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE     = paste0(apellidos, ", ", nombres)) |> 
+  add_row(NOMBRE = c("Lafuente Teira, Javier", 
+                     "Pérez Martín, María Isabel")) |> 
+  mutate(
+    FECHAALTA = case_when(
+      NOMBRE == "Lafuente Teira, Javier"      ~ "16/06/2022", 
+      NOMBRE == "Pérez Martín, María Isabel"  ~ "03/02/2025",
+      .default = "10/03/2022"),
+    FECHABAJA = case_when(
+      NOMBRE == "Hernando Ruiz, Ana Rosa"          ~ "31/01/2025",
+      NOMBRE == "Lafuente Teira, Javier"           ~ "31/01/2025",
+      NOMBRE == "García-Gallardo Frings, Juan"     ~ "03/02/2025",
+      .default = "12/01/2026"
+    ),
+     LEGISLATURA = "XI"
+  ) |>
+  select(NOMBRE, LEGISLATURA, FECHAALTA, FECHABAJA)
+
+library(rvest)
+
+diputados_castilla_leon_xii <- tibble(
+  apellido = read_html("https://www.ccyl.es/Organizacion/DetalleGrupo?Legislatura=12&CodigoGrupoParlamentario=VOX") |>
+    html_elements(".cc_org_ProcuradorApellidos") |>
+    html_text2(),
+  nombre = read_html("https://www.ccyl.es/Organizacion/DetalleGrupo?Legislatura=12&CodigoGrupoParlamentario=VOX") |>
+    html_elements(".cc_org_ProcuradorNombre") |>
+    html_text2(),
+  NOMBRE = paste0(apellido, ",", " ", nombre)
+) |> 
+  select(NOMBRE) |> 
+  mutate(LEGISLATURA = "XII",
+         FECHAALTA = "14/04/2026",
+         FECHABAJA = NA_character_)
+
+diputados_castilla_leon <- rbind(diputados_castilla_leon_x, diputados_castilla_leon_xi, diputados_castilla_leon_xii)
+diputados_castilla_leon
+```
+
+```{r}
+diputats_catalunya_xiii <- read_html("https://es.wikipedia.org/wiki/Anexo:Miembros_Parlamento_de_Catalu%C3%B1a_XIII_legislatura") |>
+  html_element("table.wikitable") |>
+  html_table()
+
+diputats_catalunya_xiii <- diputats_catalunya_xiii |> 
+  select(which(!duplicated(names(diputats_catalunya_xiii), fromLast = TRUE))) |> 
+  filter(str_detect(Grupo, "Vox")) |> 
+  select(-Candidatura)
+
+diputats_catalunya_xiii <- diputats_catalunya_xiii |> 
+  mutate(
+    # Quitar números entre corchetes tipo [3], [19]...
+    NOMBRE = str_remove_all(`Nombre y apellidos`, "\\[\\d+\\]") |> str_squish(),
+    # Reordenar a formato Apellidos, Nombre
+    partes     = str_split(NOMBRE, " "),
+    n_palabras = lengths(partes),
+    apellidos  = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres    = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE     = paste0(apellidos, ", ", nombres),
+    # Convertir Alta a fecha
+    FECHAALTA  = dmy(Alta),
+    FECHABAJA  = if_else(str_detect(Grupo, "hasta"), dmy("2 de noviembre de 2022"), NA),
+    LEGISLATURA = "XIII",
+    CIRCUNSCRIPCIÓN = Circunscripción
+  ) |>
+  select(NOMBRE, FECHAALTA, FECHABAJA, CIRCUNSCRIPCIÓN, LEGISLATURA)
+
+
+diputats_catalunya_xiv <- read_html("https://es.wikipedia.org/wiki/Anexo:Miembros_Parlamento_de_Catalu%C3%B1a_XV_legislatura") |>
+  html_element("table.wikitable") |>
+  html_table()
+
+diputats_catalunya_xiv <- diputats_catalunya_xiv |> 
+  select(which(!duplicated(names(diputats_catalunya_xiv), fromLast = TRUE))) |> 
+  filter(str_detect(Grupo, "Vox")) |> 
+  select(-Candidatura)
+
+diputats_catalunya_xiv <- diputats_catalunya_xiv |>
+  mutate(
+
+    partes     = str_split(`Nombre y apellidos`, " "),
+    n_palabras = lengths(partes),
+    apellidos  = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres    = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE     = paste0(apellidos, ", ", nombres),
+    # Convertir Alta a fecha
+    FECHAALTA  = dmy(Alta),
+    FECHABAJA  = if_else(str_detect(Grupo, "hasta"), dmy("2 de noviembre de 2022"), NA),
+    LEGISLATURA = "XIV",
+    CIRCUNSCRIPCIÓN = `Circunscripción electoral`
+    ) |>
+  select(NOMBRE, FECHAALTA, FECHABAJA, CIRCUNSCRIPCIÓN, LEGISLATURA)
+
+diputats_catalunya <- rbind(diputats_catalunya_xiii, diputats_catalunya_xiv) |> 
+  mutate(NOMBRE = if_else(NOMBRE == "Bello Sanz, Andrés", "Bello Sanz, Andrés Félix", NOMBRE))
+
+diputats_catalunya |>
+  group_by(NOMBRE) |> 
+  summarise(n_legislaturas = n_distinct(LEGISLATURA),
+            legislaturas = paste(sort(unique(LEGISLATURA)), collapse = ", ")) |>
+  filter(n_legislaturas < 2) |>
+  arrange(desc(n_legislaturas))
+```
+
+```{r}
+diputats_valenciana_x <- 
+  read_html("https://www.cortsvalencianes.es/es/composicion/diputados?gp=XV&legislature=X") |> 
+  html_element("#edit-table") |> 
+  html_table() |> 
+  rename(NOMBRE = 2,
+         FECHAALTA = `Fecha de inicio`,
+         CIRCUNSCRIPCIÓN = Circunscripción) |> 
+  select(NOMBRE, CIRCUNSCRIPCIÓN, FECHAALTA) |> 
+  add_row(NOMBRE = c("Serna Rosell, Rebeca", "Turiel Mollá, Miriam"),
+          CIRCUNSCRIPCIÓN = c("Castellón", "Valencia"),
+          FECHAALTA = c("04-09-2019", "21-10-2020"))|>
+  mutate(FECHABAJA = case_when(
+    NOMBRE == "Muñoz Pérez, David"             ~ "30-08-2019",
+    NOMBRE == "Roglá Benedito, Vicente Manuel"  ~ "07-10-2020",
+    NOMBRE == "Serna Rosell, Rebeca"            ~ "22-08-2021",
+    TRUE                                        ~ "04-04-2023"
+  )) 
+
+diputats_valenciana_xi <- 
+  read_html("https://www.cortsvalencianes.es/es/composicion/diputados?gp=1V&legislature=XI") |> 
+  html_element("#edit-table") |> 
+  html_table() |> 
+  rename(NOMBRE = 2,
+         CIRCUNSCRIPCIÓN = Circunscripción) |> 
+  select(NOMBRE, CIRCUNSCRIPCIÓN) |> 
+  mutate(
+    FECHAALTA = "26-06-2023",
+    FECHABAJA = NA,
+  )
+
+diputats_valenciana <- rbind(diputats_valenciana_x, diputats_valenciana_xi)
+diputats_valenciana
+```
+
+```{r}
+diputados_extremadura_xi <-
+  tibble(NOMBRE = 
+          read_html("https://www.asambleaex.es/dipsgrupo-176-11") |> 
+           html_elements("a.pn-title")|> 
+           html_text2()) |> 
+           distinct(NOMBRE) |> 
+           mutate(
+             LEGISLATURA = "XI",
+             FECHAALTA = "20/06/2023",
+             FECHABAJA = "27/10/2025"
+           )
+
+diputados_extremadura_xii <-
+  tibble(NOMBRE = 
+          read_html("https://www.asambleaex.es/dipsgrupo-176-12-ALTA") |> 
+           html_elements("a.pn-title")|> 
+           html_text2()) |> 
+           distinct(NOMBRE) |> 
+           mutate(
+             LEGISLATURA = "XII",
+             FECHAALTA = "20/01/2026",
+             FECHABAJA = NA_character_
+           )
+
+diputados_extremadura <- rbind(diputados_extremadura_xi, diputados_extremadura_xii)
+```
+
+```{r}
+diputados_rioja <- 
+  tibble(
+    NOMBRE = c("Alacid López, Héctor", "Alda Pérez, Ángel"),
+    FECHAALTA = "22/06/2023",
+    FECHABAJA = NA_character_
+)
+```
+
+```{r}
+diputados_murcia_x <-
+          read_html(
+            "https://es.wikipedia.org/wiki/Elecciones_a_la_Asamblea_Regional_de_Murcia_de_2019#") |>
+           html_elements("table.wikitable")|> 
+           html_table()
+diputados_murcia_x <- diputados_murcia_x[[11]] |> 
+  set_names(c("N", "NOMBRE", "Lista", "Partido")) |>
+  filter(str_detect(Partido, "(?i)vox")) |>
+  mutate(
+    NOMBRE = str_squish(NOMBRE),
+    partes     = str_split(NOMBRE, " "),
+    n_palabras = lengths(partes),
+    apellidos  = map2_chr(partes, n_palabras, ~ paste(.x[(.y-1):.y], collapse = " ")),
+    nombres    = map2_chr(partes, n_palabras, ~ paste(.x[1:(.y-2)], collapse = " ")),
+    NOMBRE     = paste0(apellidos, ", ", nombres),
+    LEGISLATURA = "X",
+    FECHAALTA  = "10/06/2019",
+    FECHABAJA  = if_else(NOMBRE == "Salvador Hernández, Pascual", "03/04/2023", "23/06/2020")) |>
+  select(NOMBRE, LEGISLATURA, FECHAALTA, FECHABAJA)
+
+diputados_murcia_xi <- tibble(
+  NOMBRE = c("Antelo Paredes, José Ángel", "Arcas Cuartero, Ignacio", "Garre López, Alberto", "Martínez Alpañez, Rubén", "Martínez García, Virginia", "Martínez Nieto, Antonio", "Ruíz Díaz, María José", "Salvador Hernández, Pascual", "Sánchez Pérez, María Eugenia"),
+  FECHAALTA = "13/06/2023",
+  FECHABAJA = case_when(NOMBRE == "Antelo Paredes, José Ángel" ~ "26/02/2026",
+                        NOMBRE == "Martínez García, Virginia" ~ "14/04/2026"),
+  LEGISLATURA = "XI"
+    )
+
+diputados_murcia <- rbind(diputados_murcia_x, diputados_murcia_xi)
+
+```
+
+```{r}
+diputados_navarra <- tibble(
+  NOMBRE = c("Jiménez Román, Emilio", "Nosti Izquierdo, Maite Teresa"),
+  FECHAALTA = "16/06/2023",
+  FECHABAJA = NA_character_,
+  LEGISLATURA = "XI"
+)
+```
+
+```{r}
+diputados_euskadi <- tibble(
+  NOMBRE = c("Martínez Grisaleña, María Amaia", "Martínez Grisaleña, María Amaia"),
+  FECHAALTA = c("03/08/2020", "03/08/2020"),
+  FECHABAJA = c("27/02/2024", NA_character_),
+  LEGISLATURA = c("XII", "XIII")
+)
+```
+
+```{r}
+diputados_ceuta_xi <- tibble(
+  NOMBRE = c(
+    "Redondo Pacheco, Juan Sergio",
+    "Verdejo Ferrer, Carlos Francisco",
+    "Ruiz Enríquez, Francisco José",
+    "Cifuentes Cánovas, Ana Belén",
+    "Vázquez Soto, María del Carmen",
+    "Rodríguez Ruiz, José María"
+  ),
+  LEGISLATURA = "XI",
+  FECHAALTA = "26/05/2019",
+  FECHABAJA = case_when(
+    NOMBRE %in% c("Vázquez Soto, María del Carmen",
+                  "Rodríguez Ruiz, José María") ~ "27/01/2020",
+    TRUE ~ "28/05/2023"
+  )
+)
+
+diputados_ceuta_xii <- tibble(
+  NOMBRE = c(
+    "Redondo Pacheco, Juan Sergio",
+    "Verdejo Ferrer, Carlos Francisco",
+    "López Álvarez, María Teresa",
+    "Ruiz Enríquez, Francisco José",
+    "Cifuentes Cánovas, Ana Belén",
+    "Merelo Palomares, Yolanda"
+  ),
+  LEGISLATURA = "XII",
+  FECHAALTA = case_when(
+    NOMBRE == "Merelo Palomares, Yolanda" ~ "02/04/2025",
+    TRUE ~ "17/06/2023"
+  ),
+  FECHABAJA = case_when(
+    NOMBRE == "Verdejo Ferrer, Carlos Francisco" ~ "28/12/2025",
+    NOMBRE == "López Álvarez, María Teresa"      ~ "02/04/2025",
+    TRUE ~ NA_character_
+  )
+)
+
+diputados_ceuta <- rbind(diputados_ceuta_xi, diputados_ceuta_xii)
+```
+
+https://www.ceuta.es/ceuta/component/jdownloads/finish/1588-abril/9479-bocce-extra23-30-04-2019?Itemid=0
+
+```{r}
+diputados_melilla_xi <- tibble(
+  NOMBRE = c(
+    "Delgado Aboy, Jesús",
+    "Escoz De Gracia, Juan Carlos",
+    "Da Costa Solis, Javier"
+  ),
+  LEGISLATURA = "XI",
+  FECHAALTA = case_when(
+    NOMBRE == "Da Costa Solis, Javier" ~ "03/03/2020",
+    TRUE ~ "28/05/2019"
+  ),
+  FECHABAJA = case_when(
+    NOMBRE == "Delgado Aboy, Jesús"         ~ "22/01/2020",
+    NOMBRE == "Escoz De Gracia, Juan Carlos" ~ "03/03/2020",
+    TRUE ~ "17/06/2023"
+  )
+)
+
+diputados_melilla_xii <- tibble(
+  NOMBRE = c(
+    "Tasende Souto, José Miguel",
+    "Da Costa Solis, Javier"
+  ),
+  LEGISLATURA = "XII",
+  FECHAALTA = "17/06/2023",
+  FECHABAJA = case_when(
+    NOMBRE == "Da Costa Solis, Javier" ~ "29/07/2024",
+    TRUE ~ NA_character_
+  )
+)
+
+diputados_melilla <- rbind(diputados_melilla_xi, diputados_melilla_xii)
+```
+
+```{r Unificación de diputados electos autonómicos}
+# ============================================================
+# Unifica TODOS los tibbles de DIPUTADOS ELECTOS (no candidatos)
+# de los parlamentos/asambleas autonómicos y de Ceuta/Melilla,
+# añadiendo la CCAA de origen para poder distinguirlos.
+# ============================================================
+
+diputados_ccaa <- bind_rows(
+  diputados_andalucia            |> mutate(CCAA = "Andalucía"),
+  diputados_aragon               |> mutate(CCAA = "Aragón"),
+  diputados_asturias             |> mutate(CCAA = "Asturias"),
+  diputados_canarias             |> mutate(CCAA = "Canarias"),
+  diputados_cantabria            |> mutate(CCAA = "Cantabria"),
+  diputados_la_mancha            |> mutate(CCAA = "Castilla-La Mancha"),
+  diputados_castilla_leon        |> mutate(CCAA = "Castilla y León"),
+  diputats_catalunya             |> mutate(
+    # Aquí las fechas se leyeron como <date>; el resto de tibbles
+    # las guarda como texto "dd/mm/aaaa", así que las igualamos
+    # para poder unir las columnas con bind_rows.
+    FECHAALTA = format(FECHAALTA, "%d/%m/%Y"),
+    FECHABAJA = format(FECHABAJA, "%d/%m/%Y"),
+    CCAA = "Cataluña"
+  ),
+  diputats_valenciana            |> mutate(CCAA = "Comunidad Valenciana"),
+  diputados_comunidad_de_madrid  |> mutate(CCAA = "Comunidad de Madrid"),
+  diputados_extremadura          |> mutate(CCAA = "Extremadura"),
+  diputados_rioja                |> mutate(CCAA = "La Rioja"),
+  diputados_murcia               |> mutate(CCAA = "Región de Murcia"),
+  diputados_navarra              |> mutate(CCAA = "Navarra"),
+  diputados_euskadi              |> mutate(CCAA = "País Vasco"),
+  diputados_ceuta                |> mutate(CCAA = "Ceuta"),
+  diputados_melilla              |> mutate(CCAA = "Melilla")
+) |>
+  relocate(CCAA, .after = NOMBRE) |>
+  arrange(CCAA, LEGISLATURA, NOMBRE)
+
+# Pendientes de sumar aquí en cuanto existan sus tibbles:
+#   - Illes Balears (la web no cargaba, ver chunk de arriba)
+#   - Galicia (todavía sin construir)
+
+diputados_ccaa
+```
+
+TENGO QUE HACER CONSEJEROS TAMBIEN, NO SOLO DIPUTADOS.
+
+```{r}
+cargos_ejecutivos_vox <- tibble(
+  NOMBRE = c(
+    # === Castilla y León I (20/04/2022 - 11/07/2024) ===
+    "García-Gallardo Frings, Juan",
+    "Santonja Gómez-Agero, Gonzalo",
+    "Dueñas Merino, Gerardo",
+    "Veganzones Díez, Mariano",
+    # === Comunidad Valenciana (17/07/2023 - 11/07/2024) ===
+    "Barrera Simó, Vicente",
+    "Núñez Sánchez, Elisa",
+    "Aguirre Larrauri, José Luis",
+    # === Extremadura I (14/07/2023 - 11/07/2024) ===
+    "Higuero Martín, Ignacio",
+    # === Aragón (11/08/2023 - 11/07/2024) ===
+    "Nolasco Asensio, Alejandro",
+    "Roc Sánchez, Octavio López",
+    "Fernández Martín, Mar",
+    # === Murcia (13/09/2023 - 11/07/2024) ===
+    "Antelo Paredes, José Ángel",
+    "Pancorbo López, José Manuel",
+    # === Extremadura II (gobierno de coalición tras elecciones 21/12/2025) ===
+    "Fernández Calle, Óscar",
+    "García Lobato, Juan José"
+  ),
+  CCAA = c(
+    "Castilla y León", "Castilla y León", "Castilla y León", "Castilla y León",
+    "Comunidad Valenciana", "Comunidad Valenciana", "Comunidad Valenciana",
+    "Extremadura",
+    "Aragón", "Aragón", "Aragón",
+    "Región de Murcia", "Región de Murcia",
+    "Extremadura", "Extremadura"
+  ),
+  CARGO = c(
+    "Vicepresidente",
+    "Consejero de Cultura, Turismo y Deporte",
+    "Consejero de Agricultura, Ganadería y Desarrollo Rural",
+    "Consejero de Industria, Comercio y Empleo",
+    "Vicepresidente y Conseller de Cultura y Deporte",
+    "Consellera de Justicia e Interior",
+    "Conseller de Agricultura, Ganadería y Pesca",
+    "Consejero de Gestión Forestal y Mundo Rural",
+    "Vicepresidente Segundo y Consejero de Servicios Sociales, Familia e Infancia",
+    "Consejero de Agricultura, Ganadería y Alimentación",
+    "Consejera de Educación, Ciencia y Universidades",
+    "Vicepresidente y Consejero de Interior, Emergencias y Ordenación del Territorio",
+    "Consejero de Fomento e Infraestructuras",
+    "Vicepresidente y Consejero de Desregulación, Servicios Sociales y Familia",
+    "Consejero de Agricultura, Ganadería y Medio Natural"
+  ),
+  FECHAALTA = c(
+    "20/04/2022", "20/04/2022", "20/04/2022", "20/04/2022",
+    "17/07/2023", "17/07/2023", "17/07/2023",
+    "14/07/2023",
+    "11/08/2023", "11/08/2023", "11/08/2023",
+    "13/09/2023", "13/09/2023",
+    "24/04/2026", "24/04/2026"
+  ),
+  FECHABAJA = c(
+    "11/07/2024",   # García-Gallardo dimitió en febrero 2025 (estaba ya en oposición)
+    "11/07/2024",             # Santonja: abandonó VOX y se mantuvo en el cargo
+    "11/07/2024", "11/07/2024",
+    "11/07/2024", "11/07/2024", "11/07/2024",
+    "11/07/2024",             # Higuero: abandonó VOX y se mantuvo
+    "11/07/2024", "11/07/2024", "11/07/2024",
+    "11/07/2024", "11/07/2024",
+    NA, NA          # Gobierno actual de Extremadura — sin baja todavía
+  )
+) |> 
+  add_row(
+    NOMBRE = c(
+      "Nolasco Asensio, Alejandro",
+      "Simón [apellido2], Arancha",
+      "Biendicho Gracia, Luis Francisco"
+    ),
+    CCAA = c("Aragón", "Aragón", "Aragón"),
+    CARGO = c(
+      "Vicepresidente Primero y Consejero de Desregulación, Bienestar Social y Familia",
+      "Consejera de Agricultura, Ganadería y Alimentación",
+      "Consejero de Medio Ambiente y Turismo"
+    ),
+    FECHAALTA = c("04/05/2026", "04/05/2026", "04/05/2026"),
+    FECHABAJA = c(NA, NA, NA)
+  )
+cargos_ejecutivos_vox
+```
+
+```{r}
+diputados_vox |> 
+  distinct(NOMBRE)
+```
+
+CARGOS ORGANICOS TAMBIEN
+
+```{r}
+library(tibble)
+
+senadores_vox <- tibble(
+  NOMBRE = c(
+    "Alcaraz Martos, Francisco José",
+    "Marín Gascón, José Manuel",
+    "Merelo Palomares, Yolanda",
+    "Rodríguez de Millán Parro, María José",
+    "Carbonell Tatay, Fernando",
+    "Gómez Enríquez, Paloma"
+  ),
+  LEGISLATURA = c("XIII", "XIV", "XIV", "XIV", "XV", "XV"),
+  TIPO = c("Designado", "Electo", "Electa", "Designada", "Designado", "Designada"),
+  CIRCUNSCRIPCION = c(
+    "Parlamento de Andalucía",
+    "Murcia",
+    "Ceuta",
+    "Parlamento de Andalucía",
+    "Corts Valencianes",
+    "Parlamento de Andalucía"
+  ),
+  FECHAALTA = c("11/06/2019", "17/12/2019", "02/03/2020", "29/07/2022", "19/09/2023", "19/09/2023"),
+  FECHABAJA = c("02/12/2019", "16/08/2023", "29/05/2023", "29/05/2023", NA, NA)
+)
+```
+
+SENADORES
+
+ORGANIZACIONES SATELITALES
+
+```{r}
+#concejales_2023 <- 
+  readxl::read_xlsx("ficha_concejales_2023_21-08-2026_12_23_43.xlsx", skip = 4) |> 
+  filter(Partido == "VOX") |> 
+  filter(Municipio == "Estepona")
+```
+
+PARA HACER LO DE LAS LISTAS ESTO EN BASH
+
+# 1. Instalar PHP si no lo tienes (Mac: brew install php)
+
+# 2. Clonar el repo (trae los datos ya dentro)
+
+git clone --depth 1 https://github.com/JaimeObregon/infoelectoral.git cd infoelectoral
+
+# 3. Generar el CSV de una elección
+
+php src/lists.php files/congreso/02201512_TOTA/03021512.DAT files/congreso/02201512_TOTA/04021512.DAT \> \~/congreso_2015.csv php src/lists.php files/senado/03201512_TOTA/03031512.DAT files/senado/03201512_TOTA/04031512.DAT \> \~/senado_2015.csv
+
+```{r}
+# ============================================================
+# Candidatos de VOX - Generales 2015-2023 y Europeas 2014-2019
+# Congreso, Senado y Parlamento Europeo. Lee los ficheros .DAT
+# del Ministerio del Interior directamente en R (sin PHP).
+#
+  # Fuente 2014-2019: mirror en github.com/JaimeObregon/infoelectoral
+# Fuente 2023:      portal oficial infoelectoral.interior.gob.es
+# ============================================================
+
+library(tidyverse)
+
+# ------------------------------------------------------------
+# 1. Especificacion de los ficheros de ancho fijo
+#    Fichero 03 = candidaturas (partidos)
+#    Fichero 04 = candidatos (personas)
+# ------------------------------------------------------------
+
+pos_03 <- fwf_positions(
+  start     = c(9, 15, 65),
+  end       = c(14, 64, 214),
+  col_names = c("cod_candidatura", "siglas", "denominacion")
+)
+
+pos_04 <- fwf_positions(
+  start     = c(10, 16, 22, 25, 26, 51, 76, 101, 120),
+  end       = c(11, 21, 24, 25, 50, 75, 100, 101, 120),
+  col_names = c("cod_provincia", "cod_candidatura", "orden",
+                "tipo_candidato", "nombre", "apellido1", "apellido2",
+                "sexo", "elegido")
+)
+
+lat1 <- locale(encoding = "ISO-8859-1")
+
+# ------------------------------------------------------------
+# 2. Elecciones a descargar
+#    proceso: 02 = Congreso, 03 = Senado, 07 = Parlamento Europeo
+# ------------------------------------------------------------
+
+elecciones <- bind_rows(
+  # Generales: Congreso y Senado
+  expand_grid(
+    proceso = c("02", "03"),
+    tibble(anio = c("2015", "2016", "2019", "2019", "2023"),
+           mes  = c(  "12",   "06",   "04",   "11",   "07"))
+  ),
+  # Europeas: circunscripcion unica nacional
+  tibble(proceso = "07",
+         anio    = c("2014", "2019"),
+         mes     = c(  "05",   "05"))
+)
+
+# ------------------------------------------------------------
+# 3. Lectura de un proceso electoral
+# ------------------------------------------------------------
+
+leer_proceso <- function(proceso, anio, mes) {
+
+  aa      <- str_sub(anio, 3, 4)
+  carpeta <- str_c(proceso, anio, mes, "_TOTA")
+  camara  <- c("02" = "Congreso", "03" = "Senado",
+               "07" = "Parlamento Europeo")[[proceso]]
+  message("Leyendo ", camara, " ", anio, "-", mes, " ...")
+
+  if (anio <= "2019") {
+    # Mirror de GitHub: los .DAT estan ya descomprimidos
+    sub <- c("02" = "congreso", "03" = "senado",
+             "07" = "europeas")[[proceso]]
+    raiz <- "https://raw.githubusercontent.com/JaimeObregon/infoelectoral/main/files"
+    f03 <- str_c(raiz, "/", sub, "/", carpeta, "/03", proceso, aa, mes, ".DAT")
+    f04 <- str_c(raiz, "/", sub, "/", carpeta, "/04", proceso, aa, mes, ".DAT")
+  } else {
+    # Portal oficial: hay que bajar y descomprimir el .zip
+    url <- str_c("https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr/",
+                 carpeta, ".zip")
+    zip <- tempfile(fileext = ".zip")
+    dir <- tempfile()
+    download.file(url, zip, mode = "wb", quiet = TRUE)
+    unzip(zip, exdir = dir)
+    f03 <- list.files(dir, "^03.*\\.DAT$", full.names = TRUE,
+                      recursive = TRUE, ignore.case = TRUE)[1]
+    f04 <- list.files(dir, "^04.*\\.DAT$", full.names = TRUE,
+                      recursive = TRUE, ignore.case = TRUE)[1]
+  }
+
+  candidaturas <- read_fwf(f03, pos_03, locale = lat1,
+                           col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim))
+
+  read_fwf(f04, pos_04, locale = lat1,
+           col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    left_join(candidaturas, by = "cod_candidatura") |>
+    mutate(camara = camara, anio = anio, mes = mes)
+}
+
+# ------------------------------------------------------------
+# 4. Tabla de provincias (codigos INE)
+# ------------------------------------------------------------
+
+provincias <- tribble(
+  ~cod_provincia, ~provincia,
+  "01","Araba/Alava",       "02","Albacete",     "03","Alicante",
+  "04","Almeria",           "05","Avila",        "06","Badajoz",
+  "07","Illes Balears",     "08","Barcelona",    "09","Burgos",
+  "10","Caceres",           "11","Cadiz",        "12","Castellon",
+  "13","Ciudad Real",       "14","Cordoba",      "15","A Coruna",
+  "16","Cuenca",            "17","Girona",       "18","Granada",
+  "19","Guadalajara",       "20","Gipuzkoa",     "21","Huelva",
+  "22","Huesca",            "23","Jaen",         "24","Leon",
+  "25","Lleida",            "26","La Rioja",     "27","Lugo",
+  "28","Madrid",            "29","Malaga",       "30","Murcia",
+  "31","Navarra",           "32","Ourense",      "33","Asturias",
+  "34","Palencia",          "35","Las Palmas",   "36","Pontevedra",
+  "37","Salamanca",         "38","S.C. Tenerife","39","Cantabria",
+  "40","Segovia",           "41","Sevilla",      "42","Soria",
+  "43","Tarragona",         "44","Teruel",       "45","Toledo",
+  "46","Valencia",          "47","Valladolid",   "48","Bizkaia",
+  "49","Zamora",            "50","Zaragoza",     "51","Ceuta",
+  "52","Melilla",
+  # Las europeas se celebran en circunscripcion unica nacional
+  "99","Circunscripcion unica"
+)
+
+# ------------------------------------------------------------
+# 5. Descargar todo y construir la tabla final
+# ------------------------------------------------------------
+
+todos <- pmap(elecciones, leer_proceso) |> list_rbind()
+
+vox <- todos |>
+  filter(str_detect(siglas, regex("vox", ignore_case = TRUE))) |>
+  left_join(provincias, by = "cod_provincia") |>
+  transmute(
+    eleccion  = str_c(if_else(camara == "Parlamento Europeo",
+                              "europeas", "generales"),
+                      "_", anio, "_", mes),
+    anio      = as.integer(anio),
+    camara,
+    provincia,
+    orden     = as.integer(orden),
+    candidato = str_squish(str_c(nombre, " ", apellido1, " ", apellido2)),
+    sexo      = recode(sexo, "M" = "Hombre", "F" = "Mujer",
+                       .default = NA_character_),
+    titular   = tipo_candidato == "T",
+    elegido   = elegido == "S",
+    siglas,
+    denominacion
+  ) |>
+  arrange(anio, camara, provincia, orden)
+
+# ------------------------------------------------------------
+# 6. Comprobaciones
+# ------------------------------------------------------------
+
+# Numero de candidatos por eleccion y camara
+vox |> count(eleccion, camara)
+
+# Electos por eleccion (validacion: Congreso 2019-11 debe dar 52)
+vox |> filter(elegido) |> count(eleccion, camara)
+
+# Siglas encontradas (revisar por si hay coaliciones inesperadas)
+vox |> count(siglas)
+
+write_csv(vox, "vox_candidatos_2014_2023.csv")
+```
+
+
+
+A PARTIR DE AQUI CANDIDATOS LOAD
+
+```{r}
+library(tidyverse)
+listas_generales <- read_csv("vox_candidatos_2014_2023.csv")
+
+listas_generales <- listas_generales |>
+  mutate(candidato = if_else(row_number() == 13, "Mazaly Aguilar", candidato)) |> 
+  mutate(sexo = if_else(row_number() == 12, "Hombre", sexo))
+```
+
+```{r}
+listas_generales <-
+  listas_generales |> 
+  mutate(candidato = case_when(
+    eleccion == "generales_2015_12" & orden == 6 & provincia == "Madrid" ~ 
+      "Mazaly Aguilar",
+    
+    eleccion == "generales_2015_12" & orden == 36 & provincia == "Madrid" ~ 
+      "Salvador Monedero (Independiente)",
+    eleccion == "generales_2015_12" & orden == 3 & camara == "Senado" & provincia == "Madrid" ~  
+      "Doña Carmen Lomana (Independiente)",
+    eleccion == "generales_2016_06" & orden == 4 & provincia == "Madrid" ~ 
+      "Mazaly Aguilar",
+    eleccion == "europeas_2019_05" & orden == 2 ~ 
+      "Mazaly Aguilar",
+    eleccion == "generales_2023_07" & orden == 1 & provincia == "Murcia" & camara == "Senado" ~ 
+      "José Francisco Garre Izquierdo",
+    .default = candidato
+  ))
+```
+
+```{r}
+listas_generales |> distinct(candidato) |> 
+  nrow()
+```
+
+```{r}
+autonomicas_candidatos <- readxl::read_xlsx("CANDIDATOS_AUTONOMICAS.xlsx")
+
+readxl::read_xlsx("CANDIDATOS_AUTONOMICAS.xlsx") |> 
+  distinct(CANDIDATO) |>
+  nrow()
+```
+
+```{r}
+candidatos |> 
+  filter(elegido == TRUE) |> 
+  distinct(candidato_norm)
+```
+
+
+```{r}
+library(stringi)
+
+todos_candidatos <- bind_rows(
+  listas_generales |> select(candidato),
+  autonomicas_candidatos |> select(candidato = CANDIDATO)
+) |>
+  mutate(candidato_norm = candidato |> str_squish() |> stri_trans_general("Latin-ASCII") |> str_to_upper()) |>
+  distinct(candidato_norm)
+
+nrow(todos_candidatos)
+```
+
+```{r}
+autonomicas_candidatos |> 
+glimpse()
+```
+
+```{r}
+library(stringi)
+
+listas_generales_norm <- listas_generales |>
+  rename(circunscripcion = provincia, ambito = camara) |>
+  mutate(
+    candidato_norm = candidato |> str_squish() |> stri_trans_general("Latin-ASCII") |> str_to_upper(),
+    nivel  = if_else(ambito == "Parlamento Europeo", "europeo", "nacional"),
+    fuente = "infoelectoral"
+  ) |>
+  select(candidato, candidato_norm, nivel, eleccion, anio, ambito,
+         circunscripcion, orden, titular, elegido, sexo, siglas, fuente)
+
+autonomicas_norm <- autonomicas_candidatos |>
+  rename(
+    candidato       = CANDIDATO,
+    ambito          = CCAA,
+    eleccion        = ELECCION,
+    circunscripcion = CIRCUNSCRIPCION,
+    orden           = ORDEN,
+    elegido         = ELEGIDO,
+    fuente          = FUENTE
+  ) |>
+  mutate(
+    candidato_norm = candidato |> str_squish() |> stri_trans_general("Latin-ASCII") |> str_to_upper(),
+    nivel   = "autonomico",
+    anio    = as.numeric(str_extract(eleccion, "\\d{4}")),
+    titular = NA,
+    sexo    = NA_character_,
+    siglas  = "VOX"
+  ) |>
+  select(candidato, candidato_norm, nivel, eleccion, anio, ambito,
+         circunscripcion, orden, titular, elegido, sexo, siglas, fuente)
+
+
+municipales_candidatos <- readxl::read_xlsx("CANDIDATOS_MUNICIPALES.xlsx")
+
+municipales_norm <- municipales_candidatos |>
+  rename(
+    candidato       = CANDIDATO,
+    ambito          = CCAA,
+    eleccion        = ELECCION,
+    circunscripcion = CIRCUNSCRIPCION,
+    orden           = ORDEN,
+    elegido         = ELEGIDO,
+    fuente          = FUENTE
+  ) |>
+  mutate(
+    candidato_norm = candidato |> str_squish() |> stri_trans_general("Latin-ASCII") |> str_to_upper(),
+    nivel   = "municipal",
+    anio    = as.numeric(str_extract(eleccion, "\\d{4}")),
+    titular = NA,
+    sexo    = NA_character_,
+    siglas  = "VOX"
+  ) |>
+  select(candidato, candidato_norm, nivel, eleccion, anio, ambito,
+         circunscripcion, orden, titular, elegido, sexo, siglas, fuente)
+
+candidatos <- bind_rows(listas_generales_norm, autonomicas_norm, municipales_norm)
+```
+
+```{r}
+candidatos |> select(-candidato) |> filter(ambito == "Ceuta")
+```
+
+```{r}
+candidatos <- candidatos |> 
+  select(-candidato) |> 
+  mutate(candidato_norm = str_remove(candidato_norm, "^DO(N|NA) "))
+```
+
+
+```{r}
+# Nombres que han sido candidatos en nacional, europeo o autonómico
+nombres_no_municipal <- candidatos |>
+  filter(nivel != "municipal") |>
+  distinct(candidato_norm) |>
+  pull(candidato_norm)
+
+# candidatos: todos los de europeas/nacionales/autonomicas + los de
+# municipales que ADEMÁS estuvieron en alguna de esas otras tres
+candidatos_2 <- candidatos |>
+  filter(nivel != "municipal" | candidato_norm %in% nombres_no_municipal)
+```
+
+
+
+```{r}
+nombres_con_municipal <- candidatos_2 |>
+  filter(nivel == "municipal") |>
+  distinct(candidato_norm) |>
+  pull(candidato_norm)
+
+candidatos_municipal <- candidatos_2 |>
+  filter(candidato_norm %in% nombres_con_municipal)
+```
+
+```{r}
+candidatos_municipal |> distinct(candidato_norm) |>
+  nrow()
+```
+
+```{r Variable recall}
+# ============================================================
+# RECALL: estimación de escaños de VOX previa a cada elección,
+# usada más tarde para el threshold de "escaño seguro".
+#
+# recall = estimación del CIS para esa (elección, circunscripción)
+#          si existe publicada;
+#          si no, escaños que VOX obtuvo en la convocatoria
+#          ANTERIOR del mismo tipo y circunscripción (o 0 si es
+#          la primera convocatoria en la que se presentó).
+#
+# Fuentes CIS recopiladas (todas verificadas contra el total que
+# publica el propio informe del CIS):
+#   - cis_estimaciones_generales.csv    (Congreso: 2015,2016 = 0
+#     explícito porque el CIS ni incluía a VOX; 2019-04, 2019-11
+#     y 2023-07 con desglose completo por provincia)
+#   - cis_estimaciones_autonomicas.csv  (solo las convocatorias
+#     donde el CIS publicó desglose por circunscripción o donde
+#     la comunidad es uniprovincial; el resto no tiene estimación
+#     del CIS a ese nivel de detalle y usará el fallback)
+#   - cis_estimaciones_municipales.csv  (Madrid y Barcelona,
+#     únicos municipios con preelectoral propio del CIS)
+#
+# NOTA: Asturias y Región de Murcia en 2015 tenían varias
+# circunscripciones internas (no una sola "provincia"), así que
+# sus estimaciones CIS (que son un único total autonómico) NO se
+# han podido repartir entre esas circunscripciones y se ha dejado
+# que usen el fallback de escaños anteriores en su lugar.
+# ============================================================
+
+# 1. Escaños obtenidos por VOX en cada convocatoria y circunscripción
+escanos_por_convocatoria <- candidatos |>
+  filter(elegido == TRUE) |>
+  count(nivel, ambito, circunscripcion, eleccion, anio, name = "escanos")
+
+# 2. Escaños de la convocatoria ANTERIOR del mismo tipo y circunscripción
+escanos_anteriores <- escanos_por_convocatoria |>
+  arrange(nivel, ambito, circunscripcion, anio) |>
+  group_by(nivel, ambito, circunscripcion) |>
+  mutate(escanos_anteriores = lag(escanos, order_by = anio)) |>
+  ungroup() |>
+  mutate(escanos_anteriores = replace_na(escanos_anteriores, 0)) |>
+  select(nivel, ambito, circunscripcion, eleccion, escanos_anteriores)
+
+# 3. Estimaciones del CIS: las tres fuentes, unidas
+cis_estimaciones <- bind_rows(
+  read_csv("cis_estimaciones_generales.csv"),
+  read_csv("cis_estimaciones_autonomicas.csv"),
+  read_csv("cis_estimaciones_municipales.csv")
+) |>
+  mutate(escanos_cis = escanos_vox_min) |>  # cota INFERIOR del rango CIS (conservador)
+  select(eleccion, circunscripcion, escanos_cis)
+
+# 4. recall = CIS si existe, si no, escaños de la convocatoria anterior
+recall_tabla <- escanos_anteriores |>
+  left_join(cis_estimaciones, by = c("eleccion", "circunscripcion")) |>
+  mutate(recall = coalesce(escanos_cis, escanos_anteriores))
+
+candidatos <- candidatos |>
+  left_join(
+    recall_tabla |> select(nivel, ambito, circunscripcion, eleccion, recall),
+    by = c("nivel", "ambito", "circunscripcion", "eleccion")
+  )
+
+candidatos |> count(nivel, is.na(recall))
+```
+
+
+```{r}
+wikidata <- readxl::read_xlsx("PERSONAS_VOX_WIKIDATA.xlsx") |> 
+  mutate(
+    candidato_norm = CANDIDATO |> str_squish() |> stri_trans_general("Latin-ASCII") |> str_to_upper())
+
+candidatos <- candidatos |> 
+  left_join(
+    wikidata, by = "candidato_norm")
+```
+
+
+```{r}
+candidatos <- candidatos |> 
+  select(-CANDIDATO)
+```
+
+
+```{r}
+candidatos <- candidatos |>
+  distinct(candidato_norm, eleccion, .keep_all = TRUE)
+```
+
+
+
+```{r}
+write_csv(candidatos,)
+```
+

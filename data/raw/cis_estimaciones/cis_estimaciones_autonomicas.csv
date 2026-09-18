@@ -1,0 +1,62 @@
+eleccion,circunscripcion,escanos_vox_min,escanos_vox_max
+autonomicas_2015_03,Almería,0,0
+autonomicas_2015_03,Cádiz,0,0
+autonomicas_2015_03,Córdoba,0,0
+autonomicas_2015_03,Granada,0,0
+autonomicas_2015_03,Huelva,0,0
+autonomicas_2015_03,Jaén,0,0
+autonomicas_2015_03,Málaga,0,0
+autonomicas_2015_03,Sevilla,0,0
+autonomicas_2018_12,Almería,1,1
+autonomicas_2018_12,Cádiz,0,0
+autonomicas_2018_12,Córdoba,0,0
+autonomicas_2018_12,Granada,0,0
+autonomicas_2018_12,Huelva,0,0
+autonomicas_2018_12,Jaén,0,0
+autonomicas_2018_12,Málaga,0,0
+autonomicas_2018_12,Sevilla,0,0
+autonomicas_2022_06,Almería,2,3
+autonomicas_2022_06,Cádiz,3,3
+autonomicas_2022_06,Córdoba,2,2
+autonomicas_2022_06,Granada,2,3
+autonomicas_2022_06,Huelva,2,2
+autonomicas_2022_06,Jaén,1,2
+autonomicas_2022_06,Málaga,3,3
+autonomicas_2022_06,Sevilla,2,3
+autonomicas_2019_05,Alicante,2,3
+autonomicas_2019_05,Castellón,1,1
+autonomicas_2019_05,Valencia,2,2
+autonomicas_2021_02,Barcelona,4,6
+autonomicas_2021_02,Girona,1,1
+autonomicas_2021_02,Lleida,0,1
+autonomicas_2021_02,Tarragona,1,2
+autonomicas_2022_02,Ávila,0,1
+autonomicas_2022_02,Burgos,1,1
+autonomicas_2022_02,León,1,1
+autonomicas_2022_02,Palencia,0,1
+autonomicas_2022_02,Salamanca,1,1
+autonomicas_2022_02,Segovia,0,1
+autonomicas_2022_02,Soria,0,0
+autonomicas_2022_02,Valladolid,1,1
+autonomicas_2022_02,Zamora,0,1
+autonomicas_2020_07,Álava,0,0
+autonomicas_2020_07,Guipúzcoa,0,0
+autonomicas_2020_07,Vizcaya,0,0
+autonomicas_2020_07,A Coruña,0,0
+autonomicas_2020_07,Lugo,0,0
+autonomicas_2020_07,Ourense,0,0
+autonomicas_2020_07,Pontevedra,0,0
+autonomicas_2024_02,A Coruña,0,0
+autonomicas_2024_02,Lugo,0,0
+autonomicas_2024_02,Ourense,0,0
+autonomicas_2024_02,Pontevedra,0,0
+autonomicas_2019_05,Cantabria,1,2
+autonomicas_2023_05,Cantabria,4,5
+autonomicas_2019_05,Comunidad de Madrid,6,8
+autonomicas_2021_05,Comunidad de Madrid,9,9
+autonomicas_2023_05,Comunidad de Madrid,8,11
+autonomicas_2019_05,Región de Murcia,4,5
+autonomicas_2023_05,Región de Murcia,7,9
+autonomicas_2023_05,Navarra,2,3
+autonomicas_2019_05,La Rioja,0,0
+autonomicas_2023_05,La Rioja,1,2

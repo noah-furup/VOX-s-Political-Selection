@@ -1,0 +1,370 @@
+---
+title: "07 · Regressions"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Validation of the electability threshold and comparison of the candidates placed within and just below it in the general election of July 2023 (sex, occupation, previous party, candidacies in 2013-2017).
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+
+# objects made by 02_data_extraction.qmd
+load(here("data", "processed", "02_data_extraction.RData"))
+
+# objects made by 04_data_enrichment.qmd
+load(here("data", "processed", "04_data_enrichment.RData"))
+```
+
+# Regressions
+
+```{r EXPECTED SEATS VARIABLE AS A PREDICTOR}
+library(sandwich)
+library(lmtest)
+library(broom)
+
+# ---- 1. one row per VOX list (election + chamber + constituency) ----------------------
+expected_check <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  group_by(level, election, chamber, province, expected_seats, expected_seats_source) |>
+  summarise(seats = sum(is_elected %in% TRUE), .groups = "drop") |>
+  mutate(from_cis = expected_seats_source == "CIS constituency estimate")
+
+expected_check |> count(level, expected_seats_source)
+
+# ---- 2. do the expected seats predict the seats actually won? --------------------------
+# standard errors clustered by election: constituencies of the same election share shocks
+models <- list(
+  "1 Pooled"      = lm(seats ~ expected_seats, data = expected_check),
+  "2 + level FE"  = lm(seats ~ expected_seats + level, data = expected_check),
+  "3 + source"    = lm(seats ~ expected_seats * from_cis + level, data = expected_check),
+  "4 National"    = lm(seats ~ expected_seats, data = filter(expected_check, level == "National")),
+  "5 Autonomical" = lm(seats ~ expected_seats, data = filter(expected_check, level == "Autonomical")),
+  "6 Municipal"   = lm(seats ~ expected_seats, data = filter(expected_check, level == "Municipal"))
+)
+
+regression_table <- list()
+for (m in names(models)) {
+  regression_table[[m]] <- coeftest(models[[m]],
+                                    vcov = vcovCL(models[[m]], cluster = ~ election)) |>
+    tidy() |>
+    mutate(model = m,
+           n     = nobs(models[[m]]),
+           r2    = summary(models[[m]])$r.squared)
+}
+regression_table <- bind_rows(regression_table) |>
+  select(model, term, estimate, std.error, p.value, n, r2) |>
+  mutate(across(c(estimate, std.error, r2), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+regression_table |> print(n = Inf)
+
+# ---- 3. the threshold: are the top_expected candidates the ones who got elected? --------
+electable_check <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(is_elected = is_elected %in% TRUE)
+
+electable_logit <- glm(is_elected ~ top_expected + level,
+                       family = binomial, data = electable_check)
+
+coeftest(electable_logit, vcov = vcovCL(electable_logit, cluster = ~ election)) |>
+  tidy() |>
+  mutate(odds_ratio = exp(estimate))
+
+# share elected among top_expected and the rest
+electable_check |>
+  group_by(level, top_expected) |>
+  summarise(candidates = n(), elected = sum(is_elected),
+            share_elected = mean(is_elected), .groups = "drop")
+
+# ---- 4. plot: expected seats against seats won -------------------------------------------
+ggplot(expected_check, aes(expected_seats, seats)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_jitter(aes(colour = expected_seats_source), width = 0.1, height = 0.1, alpha = 0.5, size = 1.6) +
+  geom_smooth(method = "lm", se = TRUE, colour = "black", linewidth = 0.7) +
+  facet_wrap(~ level, scales = "free") +
+  scale_colour_manual(values = c("CIS constituency estimate"          = "#0072B2",
+                                 "previous result, same constituency" = "#E69F00",
+                                 "no CIS estimate before 2018 (0)"    = "#CC79A7",
+                                 "first contest (0)"                  = "#999999")) +
+  labs(x = "Expected seats", y = "Seats actually won", colour = NULL,
+       title = "Do the expected seats predict the seats Vox actually won?",
+       subtitle = "One point per list. Dashed line: perfect prediction.") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r REGRESSION SEX}
+library(sandwich)
+library(lmtest)
+library(broom)
+library(survival)
+
+# Who gets an electable place? The Congress candidates of July 2023 are split in two
+# groups by data/manual/isco_candidatos_2023.xlsx (isco08_group): those within the electoral
+# threshold of their constituency ("Dentro del umbral", the heads of list included) and
+# the three titulars right below it ("Justo debajo del umbral"), who are neither heads
+# of list nor above the threshold in that election. One row per person
+threshold_sample <- vox_candidates |>
+  filter(election == "general_2023_07", chamber == "Congress",
+         is_titular %in% c(TRUE, NA), !is.na(isco08_group)) |>
+  slice_min(list_position, n = 1, by = person_id, with_ties = FALSE) |>
+  mutate(electable      = isco08_group == "Dentro del umbral",
+         sex            = factor(sex, levels = c("Male", "Female")),
+         isco_class     = case_when(isco08_major == "1"  ~ "1 Managers",
+                                    isco08_major == "2"  ~ "2 Professionals",
+                                    !is.na(isco08_major) ~ "3 Rest",
+                                    TRUE                 ~ "4 Unknown") |>
+                            factor(levels = c("3 Rest", "1 Managers", "2 Professionals", "4 Unknown")),
+         prev_party_any = has_prev_party %in% TRUE) |>
+  select(person_id, candidate, province, list_position, electable, isco08_group, sex,
+         isco08, isco08_title, isco08_major, isco08_major_title, isco_class,
+         prev_party, prev_party_any, in_lists_2013_2017)
+
+threshold_sample |> count(isco08_group, electable)
+
+# the constituencies that identify the comparison: those with people in both groups
+threshold_sample |>
+  summarise(within = sum(electable), below = sum(!electable), .by = province) |>
+  arrange(desc(within)) |>
+  print(n = Inf)
+
+# ---- 1. sex: descriptives and Fisher exact test ----------------------------------------
+sex_table <- table(sex = threshold_sample$sex, electable = threshold_sample$electable)
+sex_table
+prop.table(sex_table, margin = 1) |> round(3)
+fisher.test(sex_table)
+
+# ---- 2. sex as a predictor of an electable place ----------------------------------------
+# the odds of an electable place are compared in two ways:
+#   a. a logit over the whole sample, standard errors clustered by constituency
+#   b. a conditional logit, which compares the candidates of the same constituency only
+#      (constituencies with no electable candidate drop out of this model)
+# list_position is not a control here: the two groups are defined by it
+threshold_models <- list(
+  "1 Logit"             = glm(electable ~ sex, family = binomial, data = threshold_sample),
+  "2 Conditional logit" = clogit(electable ~ sex + strata(province), data = threshold_sample)
+)
+
+# the table of every model: clustered standard errors for the logits, the model's own for
+# the conditional logit, which is already within constituency
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+```
+
+```{r REGRESSION ISCO + SEX}
+# The occupation before politics (ISCO-08 major group) added to sex. The four digit codes
+# are collapsed into managers (1), professionals (2), the rest (3-9) and "Unknown", the
+# candidates whose occupation was not found: they are 2 of the 44 within the threshold and
+# 61 of the 137 below it, so the category also measures how much press each group gets
+threshold_sample |> count(electable, isco_class)
+threshold_sample |> count(electable, isco08_major, isco08_major_title) |> print(n = Inf)
+
+isco_table <- table(isco = threshold_sample$isco_class, electable = threshold_sample$electable)
+isco_table
+prop.table(isco_table, margin = 1) |> round(3)
+fisher.test(isco_table)
+
+# the same, dropping the candidates without a known occupation
+fisher.test(isco_table[rownames(isco_table) != "4 Unknown", ])
+
+threshold_models <- list(
+  "1 Logit, ISCO"            = glm(electable ~ isco_class, family = binomial, data = threshold_sample),
+  "2 Logit, ISCO + sex"      = glm(electable ~ isco_class + sex, family = binomial, data = threshold_sample),
+  "3 Conditional logit"      = clogit(electable ~ isco_class + sex + strata(province), data = threshold_sample),
+  "4 Logit, ISCO known only" = glm(electable ~ isco_class + sex, family = binomial,
+                                   data = filter(threshold_sample, isco_class != "4 Unknown"))
+)
+
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+```
+
+
+```{r REGRESSION ISCO + SEX + PREV_PARTY}
+# A previous party added to the occupation and sex. has_prev_party is TRUE or NA, because
+# the absence of a previous party cannot be told apart from the absence of evidence of one;
+# to compare the two groups every NA is read here as FALSE (prev_party_any, built with the
+# sample), so the coefficient is the effect of a previous party *on record*
+threshold_sample |> count(electable, prev_party_any)
+threshold_sample |> filter(prev_party_any) |> count(electable, prev_party) |> print(n = Inf)
+
+party_table <- table(prev_party = threshold_sample$prev_party_any, electable = threshold_sample$electable)
+party_table
+prop.table(party_table, margin = 1) |> round(3)
+fisher.test(party_table)
+
+threshold_models <- list(
+  "1 Logit, party"              = glm(electable ~ prev_party_any, family = binomial, data = threshold_sample),
+  "2 Logit, ISCO + sex + party" = glm(electable ~ isco_class + sex + prev_party_any,
+                                      family = binomial, data = threshold_sample),
+  "3 Conditional logit"         = clogit(electable ~ isco_class + sex + prev_party_any + strata(province),
+                                         data = threshold_sample),
+  "4 + lists of 2013-2017"      = glm(electable ~ isco_class + sex + prev_party_any + in_lists_2013_2017,
+                                      family = binomial, data = threshold_sample)
+)
+
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+
+# an odds ratio in the thousands with a huge standard error means a category has no
+# variation left (complete separation): read the Fisher tables above instead
+```
+
+
+
+# Tables for the text
+
+```{r TABLE OF RQ2 DESCRIPTIVES}
+# profile of the two groups, with the Fisher exact test of each variable. Previous parties:
+# PP includes Alianza Popular; the historical far right follows the abbreviations of
+# 02_data_extraction.qmd (Fuerza Nueva, Falange, Democracia Nacional, Juntas Españolas...)
+far_right_abbreviations <- "\\b(FN|FE-JONS|LF|FEA|DN|JJEE|AES|E-2000|PxC|MSR|ADN)\\b"
+
+rq2_sample <- threshold_sample |>
+  mutate(group         = if_else(electable, "Within the threshold", "Just below it"),
+         female        = sex == "Female",
+         managers      = isco_class == "1 Managers",
+         professionals = isco_class == "2 Professionals",
+         other_isco    = isco_class == "3 Rest",
+         unknown_isco  = isco_class == "4 Unknown",
+         prev_pp       = str_detect(replace_na(prev_party, ""), "\\b(PP|AP)\\b"),
+         prev_cs       = str_detect(replace_na(prev_party, ""), "\\bCs\\b"),
+         prev_far      = str_detect(replace_na(prev_party, ""), far_right_abbreviations))
+
+rq2_variables <- c("Women"                                    = "female",
+                   "Managers (ISCO 1)"                        = "managers",
+                   "Professionals (ISCO 2)"                   = "professionals",
+                   "Other occupations (ISCO 3-9)"             = "other_isco",
+                   "Occupation unknown"                       = "unknown_isco",
+                   "Stood for another party before"           = "prev_party_any",
+                   "   of which PP or AP"                     = "prev_pp",
+                   "   of which Cs"                           = "prev_cs",
+                   "   of which historical far right"         = "prev_far",
+                   "On a Vox list in 2013-2017"               = "in_lists_2013_2017")
+
+rq2_descriptives <- tibble(Variable = names(rq2_variables), variable = unname(rq2_variables)) |>
+  mutate(within = map_chr(variable, \(v) {
+           x <- rq2_sample[[v]][rq2_sample$electable]
+           str_c(sum(x), " (", format(round(100 * mean(x), 1), nsmall = 1), "%)")
+         }),
+         below = map_chr(variable, \(v) {
+           x <- rq2_sample[[v]][!rq2_sample$electable]
+           str_c(sum(x), " (", format(round(100 * mean(x), 1), nsmall = 1), "%)")
+         }),
+         fisher_p = map_dbl(variable, \(v) fisher.test(table(rq2_sample[[v]], rq2_sample$electable))$p.value),
+         fisher_p = if_else(fisher_p < 0.001, "<0.001", format(round(fisher_p, 3), nsmall = 3))) |>
+  select(-variable) |>
+  add_row(Variable = "Candidates", within = as.character(sum(rq2_sample$electable)),
+          below = as.character(sum(!rq2_sample$electable)), fisher_p = "", .before = 1) |>
+  rename(`Within the threshold` = within, `Just below it` = below, `Fisher p` = fisher_p)
+
+stargazer(as.data.frame(rq2_descriptives), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Candidates within and just below the electability threshold, Congress, July 2023",
+          notes = c("Number of candidates and share of each group. Fisher: exact test of the variable against the group.",
+                    "A candidate can have stood for several parties."))
+```
+
+
+```{r TABLE OF RQ2 REGRESSIONS}
+# the logits of the text in one table: odds ratios, with 95% confidence intervals from
+# standard errors clustered by constituency (the model's own for the conditional logit)
+rq2_models <- list(
+  glm(electable ~ sex, family = binomial, data = threshold_sample),
+  glm(electable ~ isco_class + sex, family = binomial, data = threshold_sample),
+  glm(electable ~ isco_class + sex + prev_party_any, family = binomial, data = threshold_sample),
+  glm(electable ~ isco_class + sex + prev_party_any + in_lists_2013_2017,
+      family = binomial, data = threshold_sample),
+  clogit(electable ~ isco_class + sex + prev_party_any + in_lists_2013_2017 + strata(province),
+         data = threshold_sample)
+)
+
+rq2_vcov <- map(rq2_models, \(m) if (inherits(m, "coxph")) vcov(m) else vcovCL(m, cluster = ~ province))
+rq2_se   <- map(rq2_vcov, \(v) sqrt(diag(v)))
+rq2_or   <- map(rq2_models, \(m) exp(coef(m)))
+rq2_ci   <- map2(rq2_models, rq2_se, \(m, se) exp(cbind(coef(m) - 1.96 * se, coef(m) + 1.96 * se)))
+rq2_p    <- map2(rq2_models, rq2_se, \(m, se) 2 * pnorm(-abs(coef(m) / se)))
+
+stargazer(rq2_models, type = table_type,
+          coef = rq2_or, ci.custom = rq2_ci, p = rq2_p, t.auto = FALSE, p.auto = FALSE,
+          omit = "Constant", digits = 2,
+          title = "Odds of an electable position, Congress candidates of July 2023",
+          dep.var.caption = "Placed within the electability threshold", dep.var.labels.include = FALSE,
+          column.labels = c("Logit", "Logit", "Logit", "Logit", "Conditional logit"),
+          model.names = FALSE,
+          covariate.labels = c("Managers (ISCO 1)", "Professionals (ISCO 2)", "Occupation unknown",
+                               "Female", "Stood for another party before", "On a Vox list in 2013-2017"),
+          omit.stat = c("aic", "ll", "rsq", "max.rsq", "wald", "lr", "logrank"),
+          notes.append = FALSE,
+          notes = c("Odds ratios; 95% confidence intervals in brackets, from standard errors clustered by",
+                    "constituency (logits). The conditional logit compares candidates of the same constituency.",
+                    "Reference: men, occupations of ISCO groups 3-9. * p<0.1; ** p<0.05; *** p<0.01"))
+```

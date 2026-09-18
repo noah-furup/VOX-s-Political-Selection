@@ -1,0 +1,74 @@
+[2026-09-01 00:08:52] === Ventana: generales_2019A (20190320 -> 20190428) === 
+[2026-09-01 00:08:52] generales_2019A: consultando CDX (intento 1)... 
+[2026-09-01 00:08:53]   error: Could not resolve hostname [web.archive.org]:
+Could not resolve host: web.archive.org 
+[2026-09-01 00:09:03] generales_2019A: consultando CDX (intento 2)... 
+[2026-09-01 00:09:03]   error: Could not resolve hostname [web.archive.org]:
+Could not resolve host: web.archive.org 
+[2026-09-01 00:10:38] === Ventana: generales_2019A (20190320 -> 20190428) === 
+[2026-09-01 00:10:38] generales_2019A: consultando CDX (intento 1)... 
+[2026-09-01 00:11:40]   HTTP 504 
+[2026-09-01 00:11:51] generales_2019A: consultando CDX (intento 2)... 
+[2026-09-01 00:12:07] generales_2019A: 21 capturas encontradas. 
+[2026-09-01 00:12:07] generales_2019A: 21 capturas por descargar. 
+[2026-09-01 00:13:33] generales_2019A: COMPLETADA. 21 descargadas, 0 fallidas. 
+[2026-09-01 00:13:33] === Ventana: generales_2019N (20191015 -> 20191110) === 
+[2026-09-01 00:13:33] generales_2019N: consultando CDX (intento 1)... 
+[2026-09-01 00:13:37] generales_2019N: 20 capturas encontradas. 
+[2026-09-01 00:13:37] generales_2019N: 20 capturas por descargar. 
+[2026-09-01 00:14:54] generales_2019N: COMPLETADA. 20 descargadas, 0 fallidas. 
+[2026-09-01 00:14:54] === Ventana: generales_2023 (20230619 -> 20230723) === 
+[2026-09-01 00:14:54] generales_2023: consultando CDX (intento 1)... 
+[2026-09-01 00:14:56] generales_2023: 1215 capturas encontradas. 
+[2026-09-01 00:14:56] generales_2023: 1215 capturas por descargar. 
+[2026-09-01 00:16:19]   generales_2023: 25/1215 procesadas (0 fallos) 
+[2026-09-01 00:17:56]   generales_2023: 50/1215 procesadas (0 fallos) 
+[2026-09-01 00:19:50]   generales_2023: 75/1215 procesadas (0 fallos) 
+[2026-09-01 00:21:31]   generales_2023: 100/1215 procesadas (0 fallos) 
+[2026-09-01 00:23:02]   generales_2023: 125/1215 procesadas (0 fallos) 
+[2026-09-01 00:24:35]   generales_2023: 150/1215 procesadas (0 fallos) 
+[2026-09-01 00:26:16]   generales_2023: 175/1215 procesadas (0 fallos) 
+[2026-09-01 00:27:51]   generales_2023: 200/1215 procesadas (0 fallos) 
+[2026-09-01 00:29:33]   generales_2023: 225/1215 procesadas (0 fallos) 
+[2026-09-01 00:31:09]   generales_2023: 250/1215 procesadas (0 fallos) 
+[2026-09-01 00:32:46]   generales_2023: 275/1215 procesadas (0 fallos) 
+[2026-09-01 00:34:26]   generales_2023: 300/1215 procesadas (0 fallos) 
+[2026-09-01 00:36:01]   generales_2023: 325/1215 procesadas (0 fallos) 
+[2026-09-01 00:37:43]   generales_2023: 350/1215 procesadas (0 fallos) 
+[2026-09-01 00:39:24]   generales_2023: 375/1215 procesadas (0 fallos) 
+[2026-09-01 00:41:14]   generales_2023: 400/1215 procesadas (0 fallos) 
+[2026-09-01 00:42:43]   generales_2023: 425/1215 procesadas (0 fallos) 
+[2026-09-01 00:44:13]   generales_2023: 450/1215 procesadas (0 fallos) 
+[2026-09-01 00:45:39]   generales_2023: 475/1215 procesadas (0 fallos) 
+[2026-09-01 00:47:13]   generales_2023: 500/1215 procesadas (0 fallos) 
+[2026-09-01 00:48:44]   generales_2023: 525/1215 procesadas (0 fallos) 
+[2026-09-01 00:50:04]   generales_2023: 550/1215 procesadas (0 fallos) 
+[2026-09-01 00:51:30]   generales_2023: 575/1215 procesadas (0 fallos) 
+[2026-09-01 00:52:55]   generales_2023: 600/1215 procesadas (0 fallos) 
+[2026-09-01 00:54:21]   generales_2023: 625/1215 procesadas (0 fallos) 
+[2026-09-01 00:55:52]   generales_2023: 650/1215 procesadas (0 fallos) 
+[2026-09-01 00:57:11]   generales_2023: 675/1215 procesadas (0 fallos) 
+[2026-09-01 00:58:34]   generales_2023: 700/1215 procesadas (0 fallos) 
+[2026-09-01 00:59:55]   generales_2023: 725/1215 procesadas (0 fallos) 
+[2026-09-01 01:01:15]   generales_2023: 750/1215 procesadas (0 fallos) 
+[2026-09-01 01:02:42]   generales_2023: 775/1215 procesadas (0 fallos) 
+[2026-09-01 01:04:04]   generales_2023: 800/1215 procesadas (0 fallos) 
+[2026-09-01 01:05:30]   generales_2023: 825/1215 procesadas (0 fallos) 
+[2026-09-01 01:07:05]   generales_2023: 850/1215 procesadas (0 fallos) 
+[2026-09-01 01:08:21]   generales_2023: 875/1215 procesadas (0 fallos) 
+[2026-09-01 01:10:02]   generales_2023: 900/1215 procesadas (0 fallos) 
+[2026-09-01 01:11:21]   generales_2023: 925/1215 procesadas (0 fallos) 
+[2026-09-01 01:12:45]   generales_2023: 950/1215 procesadas (0 fallos) 
+[2026-09-01 01:14:07]   generales_2023: 975/1215 procesadas (0 fallos) 
+[2026-09-01 01:15:29]   generales_2023: 1000/1215 procesadas (0 fallos) 
+[2026-09-01 01:17:04]   generales_2023: 1025/1215 procesadas (0 fallos) 
+[2026-09-01 01:18:36]   generales_2023: 1050/1215 procesadas (0 fallos) 
+[2026-09-01 01:20:26]   generales_2023: 1075/1215 procesadas (0 fallos) 
+[2026-09-01 01:22:05]   generales_2023: 1100/1215 procesadas (0 fallos) 
+[2026-09-01 01:23:33]   generales_2023: 1125/1215 procesadas (0 fallos) 
+[2026-09-01 01:24:57]   generales_2023: 1150/1215 procesadas (0 fallos) 
+[2026-09-01 01:26:30]   generales_2023: 1175/1215 procesadas (0 fallos) 
+[2026-09-01 01:27:51]   generales_2023: 1200/1215 procesadas (0 fallos) 
+[2026-09-01 01:28:52] generales_2023: COMPLETADA. 1215 descargadas, 0 fallidas. 
+[2026-09-01 01:28:52] --- Cobertura por ventana --- 
+[2026-09-01 01:28:53] Corpus unificado: 1256 noticias. 

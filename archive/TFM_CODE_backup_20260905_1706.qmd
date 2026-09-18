@@ -1,0 +1,2134 @@
+---
+title: "VOX_CANDIDATES"
+author: "Noah Emanuel Fürup"
+format: pdf
+editor: visual
+---
+
+```{r LIBRARIES}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(countrycode)
+```
+
+#MAP ELECTORAL SYSTEMS:
+
+```{r READ IDEA ELECTORAL SYSTEM DATASET}
+idea <- read_excel("idea_export_electoral_system_design_database.xlsx")
+names(idea)   # mira aquí cómo se llaman de verdad las columnas
+
+```
+
+```{r}
+systems <- idea |>
+  filter(!is.na(ISO3), !is.na(`Electoral system family`)) |>
+  group_by(ISO3) |>
+  slice_max(Year, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  select(ISO3, Country, Year,
+         family = `Electoral system family`,
+         system = `Electoral system for national legislature`)
+
+europe <- ne_countries(scale = "medium", continent = "Europe", returnclass = "sf") |>
+  filter(admin != "Russia") |>
+  left_join(systems, by = c("iso_a3" = "ISO3"))
+
+ggplot(europe) +
+  geom_sf(aes(fill = family), colour = "white", linewidth = 0.2) +
+  coord_sf(xlim = c(-25, 45), ylim = c(34, 72)) +
+  scale_fill_brewer(palette = "Set2", na.value = "grey90", name = "Electoral system family") +
+  labs(title = "Electoral system families in Europe",
+       caption = "Source: International IDEA, Electoral System Design Database") +
+  theme_void()
+
+# ggsave("europe_electoral_systems.png", width = 10, height = 7, dpi = 300)
+
+# what didn't match
+europe |> st_drop_geometry() |> filter(is.na(family)) |> select(admin)
+```
+
+```{r}
+# the exact labels first
+europe |> st_drop_geometry() |> count(family)
+
+# share of each family
+europe |>
+  st_drop_geometry() |>
+  filter(!is.na(family)) |>
+  count(family) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  arrange(desc(n))
+
+# PR only, as a single figure
+europe |>
+  st_drop_geometry() |>
+  filter(!is.na(family)) |>
+  summarise(countries = n(),
+            pr = sum(str_detect(family, "Proportional")),
+            pct_pr = round(100 * pr / countries, 1))
+```
+
+Extraction of non-autonomical elections candidates: european and general elections
+
+Source: - 2014-2019: github.com/JaimeObregon/infoelectoral - 2023-2024: infoelectoral.interior.gob.es
+
+```{r SPANISH LETERS}
+latin1 <- locale(encoding = "ISO-8859-1")
+```
+
+```{r GITHUB MIRROR}
+MIRROR <- "https://raw.githubusercontent.com/JaimeObregon/infoelectoral/main/files"
+```
+
+The github has the files in .DAT, a file type that doesn't separate in ";" or "\|". In order to separate each column, we need to map where the separation between each variable occurs. I asked Claude to give me the exact character positions where the separation is. I used fwf_positions of ReadR to write down the column names, given the positions where the variables lie in the .DAT file.
+
+#GENERAL ELECTIONS
+
+```{r FIXED POSITIONS}
+# File 03 — candidacies (parties)
+cols_03 <- fwf_cols(
+  party_code   = c(  9,  14),
+  abbreviation = c( 15,  64),
+  full_name    = c( 65, 214)
+)
+
+# File 04 — candidates (people)
+cols_04 <- fwf_cols(
+  province_code  = c( 10,  11),
+  party_code     = c( 16,  21),
+  list_position  = c( 22,  24),
+  candidate_type = c( 25,  25),   # T = titular, S = substitute
+  first_name     = c( 26,  50),
+  surname_1      = c( 51,  75),
+  surname_2      = c( 76, 100),
+  sex            = c(101, 101),   # M / F
+  elected        = c(120, 120)    # S = elected
+)
+
+# up to 2000 the name is not split: one field, and no sex column
+cols_04_single <- fwf_cols(
+  province_code  = c( 10,  11),
+  party_code     = c( 16,  21),
+  list_position  = c( 22,  24),
+  candidate_type = c( 25,  25),
+  first_name     = c( 26, 100),   # name and both surnames together
+  elected        = c(120, 120)
+)
+```
+
+```{r ELECTIONS 2014-2019}
+LOCAL_MIRROR <- "infoelectoral/files"
+MIRROR <- "https://raw.githubusercontent.com/JaimeObregon/infoelectoral/main/files"
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+
+elections <- tribble(
+  ~process, ~year,  ~month, ~chamber,              ~mirror_folder,
+  "02",     "1977", "06",   "Congress",            "congreso",
+  "02",     "1979", "03",   "Congress",            "congreso",
+  "02",     "1982", "10",   "Congress",            "congreso",
+  "02",     "1986", "06",   "Congress",            "congreso",
+  "02",     "1989", "10",   "Congress",            "congreso",
+  "02",     "1993", "06",   "Congress",            "congreso",
+  "02",     "1996", "03",   "Congress",            "congreso",
+  "02",     "2000", "03",   "Congress",            "congreso",
+  "02",     "2004", "03",   "Congress",            "congreso",
+  "02",     "2008", "03",   "Congress",            "congreso",
+  "02",     "2011", "11",   "Congress",            "congreso",
+  "02",     "2015", "12",   "Congress",            "congreso",
+  "02",     "2016", "06",   "Congress",            "congreso",
+  "02",     "2019", "04",   "Congress",            "congreso",
+  "02",     "2019", "11",   "Congress",            "congreso",
+  "02",     "2023", "07",   "Congress",            "congreso",
+  "03",     "1977", "06",   "Senate",              "senado",
+  "03",     "1979", "03",   "Senate",              "senado",
+  "03",     "1982", "10",   "Senate",              "senado",
+  "03",     "1986", "06",   "Senate",              "senado",
+  "03",     "1989", "10",   "Senate",              "senado",
+  "03",     "1993", "06",   "Senate",              "senado",
+  "03",     "1996", "03",   "Senate",              "senado",
+  "03",     "2000", "03",   "Senate",              "senado",
+  "03",     "2004", "03",   "Senate",              "senado",
+  "03",     "2008", "03",   "Senate",              "senado",
+  "03",     "2011", "11",   "Senate",              "senado",
+  "03",     "2015", "12",   "Senate",              "senado",
+  "03",     "2016", "06",   "Senate",              "senado",
+  "03",     "2019", "04",   "Senate",              "senado",
+  "03",     "2019", "11",   "Senate",              "senado",
+  "03",     "2023", "07",   "Senate",              "senado",
+  "07",     "2014", "05",   "European Parliament", "europeas",
+  "07",     "2019", "05",   "European Parliament", "europeas",
+  "07",     "2024", "06",   "European Parliament", "europeas"
+)
+
+```
+
+```{r PROVINCES}
+provinces <- tribble(
+  ~province_code, ~province,
+  "01", "Araba/Alava",    "02", "Albacete",      "03", "Alicante",
+  "04", "Almeria",        "05", "Avila",         "06", "Badajoz",
+  "07", "Illes Balears",  "08", "Barcelona",     "09", "Burgos",
+  "10", "Caceres",        "11", "Cadiz",         "12", "Castellon",
+  "13", "Ciudad Real",    "14", "Cordoba",       "15", "A Coruna",
+  "16", "Cuenca",         "17", "Girona",        "18", "Granada",
+  "19", "Guadalajara",    "20", "Gipuzkoa",      "21", "Huelva",
+  "22", "Huesca",         "23", "Jaen",          "24", "Leon",
+  "25", "Lleida",         "26", "La Rioja",      "27", "Lugo",
+  "28", "Madrid",         "29", "Malaga",        "30", "Murcia",
+  "31", "Navarra",        "32", "Ourense",       "33", "Asturias",
+  "34", "Palencia",       "35", "Las Palmas",    "36", "Pontevedra",
+  "37", "Salamanca",      "38", "S.C. Tenerife", "39", "Cantabria",
+  "40", "Segovia",        "41", "Sevilla",       "42", "Soria",
+  "43", "Tarragona",      "44", "Teruel",        "45", "Toledo",
+  "46", "Valencia",       "47", "Valladolid",    "48", "Bizkaia",
+  "49", "Zamora",         "50", "Zaragoza",      "51", "Ceuta",
+  "52", "Melilla",        "99", "Single national constituency"
+)
+```
+
+```{r CODES MUNICIPALITIES}
+# 26codmun and 26codislas
+```
+
+```{r DOWNLOAD FILES GITHUB}
+candidate_files <- list()
+
+for (i in seq_len(nrow(elections))) {
+
+  process       <- elections$process[i]
+  year          <- elections$year[i]
+  month         <- elections$month[i]
+  chamber       <- elections$chamber[i]
+  mirror_folder <- elections$mirror_folder[i]
+
+  yy     <- str_sub(year, 3, 4)
+  folder <- str_c(process, year, month, "_TOTA")
+
+  local_dir <- str_c(LOCAL_MIRROR, "/", mirror_folder, "/", folder)
+
+  # the GitHub mirror lacks a few processes (Congress 1989 and 1993, and
+  # everything after 2019), so take those from the ministry's download area
+  if (!dir.exists(local_dir)) {
+    message("Fetching ", folder, " from the ministry portal ...")
+    zip_file <- tempfile(fileext = ".zip")
+    download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file,
+                  mode = "wb", quiet = TRUE)
+    dir.create(local_dir, recursive = TRUE, showWarnings = FALSE)
+    unzip(zip_file, exdir = local_dir)
+  }
+
+  path_03 <- list.files(local_dir, str_c("^03", process, yy, month, "[.]DAT$"),
+                        full.names = TRUE, recursive = TRUE, ignore.case = TRUE)[1]
+  path_04 <- list.files(local_dir, str_c("^04", process, yy, month, "[.]DAT$"),
+                        full.names = TRUE, recursive = TRUE, ignore.case = TRUE)[1]
+
+  message("Reading ", chamber, " ", year, "-", month, " ...")
+
+  parties <- read_fwf(path_03, cols_03, locale = latin1,
+                      col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim))
+
+  # up to 2000 the name comes in a single field; from 2004 it is split in three.
+  # Decide from the data: the second-surname block is only filled in the split one.
+  probe <- read_lines(path_04, n_max = 500, locale = latin1)
+  split <- mean(str_squish(str_sub(probe, 76, 100)) != "") > 0.5
+
+  raw <- read_fwf(path_04, if (split) cols_04 else cols_04_single,
+                  locale = latin1, col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim))
+
+  # give every process the same columns, so bind_rows and transmute never break
+  if (!"surname_1" %in% names(raw)) raw <- mutate(raw, surname_1 = NA_character_)
+  if (!"surname_2" %in% names(raw)) raw <- mutate(raw, surname_2 = NA_character_)
+  if (!"sex"       %in% names(raw)) raw <- mutate(raw, sex       = NA_character_)
+
+  candidate_files[[i]] <- raw |>
+    left_join(parties, by = "party_code") |>
+    mutate(chamber = chamber, year = year, month = month)
+}
+
+all_candidates <- bind_rows(candidate_files) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c(if_else(chamber == "European Parliament",
+                                  "european", "general"),
+                          "_", year, "_", month),
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    # str_c returns NA if ANY part is NA, and the surnames are empty before 2004
+    candidate     = str_squish(str_c(coalesce(first_name, ""), " ",
+                                     coalesce(surname_1,  ""), " ",
+                                     coalesce(surname_2,  ""))),
+    sex           = recode(sex, "M" = "Male", "F" = "Female",
+                           .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation,
+    level         = "National"
+  ) |>
+  arrange(year, chamber, province, list_position)
+
+all_candidates |> count(year, chamber) |> print(n = Inf)
+all_candidates |>
+  filter(str_detect(coalesce(abbreviation, ""), regex("vox", ignore_case = TRUE))) |>
+  count(year, chamber) |> print(n = Inf)
+```
+
+```{r JOIN PROVINCES AND TRANSMUTE}
+all_candidates <- bind_rows(candidate_files) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c(if_else(chamber == "European Parliament",
+                                  "european", "general"),
+                          "_", year, "_", month),
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    # str_c returns NA if ANY part is NA, and the surnames are empty before 2004
+    candidate     = str_squish(str_c(coalesce(first_name, ""), " ",
+                                     coalesce(surname_1,  ""), " ",
+                                     coalesce(surname_2,  ""))),
+    sex           = recode(sex, "M" = "Male", "F" = "Female",
+                           .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation,
+    level         = "National"
+  ) |>
+  arrange(year, chamber, province, list_position)
+
+# sanity check: every process must be present
+all_candidates |> count(year, chamber) |> print(n = Inf)
+all_candidates |>
+  filter(str_detect(coalesce(abbreviation, ""), regex("vox", ignore_case = TRUE))) |>
+  count(year, chamber) |> print(n = Inf)
+```
+
+```{r ADD 2023-2024 GENERAL AND EUROPEAN ELECTIONS}
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+
+elections_new <- tribble(
+  ~process, ~year,  ~month, ~chamber,
+  "02",     "2023", "07",   "Congress",
+  "03",     "2023", "07",   "Senate",
+  "07",     "2024", "06",   "European Parliament"
+)
+```
+
+```{r DOWNLOAD 2023-2024}
+portal_candidates <- list()
+
+for (i in seq_len(nrow(elections_new))) {
+
+  process <- elections_new$process[i]
+  year    <- elections_new$year[i]
+  month   <- elections_new$month[i]
+  chamber <- elections_new$chamber[i]
+
+  folder   <- str_c(process, year, month, "_TOTA")
+  zip_file <- tempfile(fileext = ".zip")
+  unzip_to <- tempfile()
+
+  message("Downloading ", chamber, " ", year, "-", month, " ...")
+
+  download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file,
+                mode = "wb", quiet = TRUE)
+  unzip(zip_file, exdir = unzip_to)
+
+  path_03 <- list.files(unzip_to, "^03.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+  path_04 <- list.files(unzip_to, "^04.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+
+  parties <- read_fwf(path_03, cols_03, locale = latin1,
+                      col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim))
+
+  portal_candidates[[i]] <- read_fwf(path_04, cols_04, locale = latin1,
+                                  col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    left_join(parties, by = "party_code") |>
+    mutate(chamber = chamber, year = year, month = month)
+}
+```
+
+```{r JOIN PROVINCES AND TRANSMUTE}
+portal_candidates <- bind_rows(portal_candidates) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c(if_else(chamber == "European Parliament",
+                                  "european", "general"),
+                          "_", year, "_", month),
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+        candidate = str_squish(str_c(coalesce(first_name, ""), " ",
+                                 coalesce(surname_1,  ""), " ",
+                                 coalesce(surname_2,  ""))),
+    sex           = recode(sex, "M" = "Male", "F" = "Female",
+                           .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation,
+    full_name
+  )
+
+all_candidates <- bind_rows(all_candidates, portal_candidates) |>
+  arrange(year, chamber, province, list_position) |> 
+  select(-full_name)
+```
+
+```{r TAKE DON/ DOÑA OUT}
+# Handled upstream in READ ALL AUTONOMICAL CANDIDATES: the honorific is stripped
+# from `candidate `before the union (this chunk referred to `candidato_norm'
+# a column that does not exist in autonomical_candidates).
+all_candidates <- all_candidates |>
+  mutate(candidate = str_squish(str_remove(candidate,
+                                           regex("^(don|do[ñn]a|d[.ª])\\s+",
+                                                 ignore_case = TRUE))))
+```
+
+```{r FILTER PP, CS AND VOX}
+pp_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "PP"))
+
+vox_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "VOX"))
+
+cs_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "C's"))
+  
+```
+
+#AUTONOMICAL ELECTIONS
+
+Claude Code For Autonomical elections: two attempts to confirm it is reproducible.
+
+Prompt 1:
+
+"Quiero que busques todas las listas de todas las elecciones autonómicas que han habido en España desde 2015 hasta 2026 y que pongas en el archivo excel en el excel de CANDIDATOS_AUTONOMICAS. Tienes que ir a la web para recopilar las siguientes variables de cada eleccion: CANDIDATO, CCAA, ELECCION, CIRCUNSCRIPCION, ORDEN, ELEGIDO (TRUE/FALSE)"
+
+Prompt 2:
+
+"You're a Computational Social Scientist. I want you to search for every candidate list of all autonomical elections in Spain from 2015 to 2026 of the following parties: PP and VOX. You have to get into the web and recopilate the following variables for each election:
+
+election: election (write it in like this: "autonomous_2015_05", where 2015 would be the year and 05 the month where the election took place) year: year of the election chamber: the chamber (such as Parlament of Andalucia, Parlament of Catalonia...) province: the province that was being represented by the candidate list_position: the position of the candidate within that list candidate: the candidate's full name is_titular: whether he was the titular of that seat or he was a substitution candidate (TRUE/FALSE), is_elected: whether he was elected (TRUE/FALSE) abbreviation: the abbreviation of the party's name
+
+the final file should be a csv file."
+
+```{r TOTAL ELECTIONS AUTONOMICAL/MUNICIPAL}
+vox_candidates |>
+  filter(level %in% c("Autonomical", "Municipal")) |>
+  group_by(level) |>
+  summarise(elections = n_distinct(election), years = n_distinct(year))
+
+# autonomicas: cada region vota por su cuenta, asi que la eleccion es region-anyo
+vox_candidates |>
+  filter(level == "Autonomical") |>
+  distinct(chamber, year) |>
+  count(chamber, name = "elections") |>
+  arrange(desc(elections))
+
+vox_candidates |>
+  filter(level == "Municipal") |>
+  count(election, year, name = "candidates")
+```
+
+```{r READ ALL AUTONOMICAL CANDIDATES}
+# =============================================================================
+# PP and VOX candidates in the regional (autonomic) elections
+#
+# These do NOT come from infoelectoral: the Ministry of the Interior does not
+# publish regional elections ("son competencia de cada Comunidad Autonoma"), so
+# both files were built from the official proclamation bulletins collected by the
+# Junta Electoral Central. That is why they are read from disk instead of a URL.
+#
+#   2000-2012 : PP only          (176 constituency-lists, from the JEC bulletins)
+#   2015-2026 : PP and VOX
+# =============================================================================
+
+autonomical_pre2015 <- read_csv(
+  "autonomicas_scrape/out_pre2015/pp_autonomicas_2000_2012.csv",
+  show_col_types = FALSE
+) |>
+  transmute(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = str_squish(candidate),
+    sex,
+    is_titular,
+    is_elected,                      # not resolved for this period: all NA
+    abbreviation,
+    level         = "Autonomical",
+    source        = source_doc,
+    list_completeness
+  )
+
+autonomical_2015_on <- read_csv(
+  "candidatos_pp_vox_autonomicas_2015_2026.csv",
+  show_col_types = FALSE
+) |>
+  transmute(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = str_squish(candidate),
+    sex,
+    is_titular,
+    is_elected,
+    abbreviation,
+    level         = "Autonomical",
+    source        = source_doc)
+
+autonomical_candidates <- bind_rows(autonomical_pre2015, autonomical_2015_on) |>
+  arrange(year, chamber, province, desc(is_titular), list_position)
+```
+
+```{r READ CIUDADANOS CANDIDATES AUTONOMICAL}
+cs_candidates_autonomical <- read_csv("candidatos_cs_autonomicas_2015_2026.csv")
+cs_candidates_autonomical
+```
+
+```{r FILTER PP AND VOX CANDIDATES}
+pp_candidates <- pp_candidates |> 
+  bind_rows(pp_candidates, autonomical_candidates |> filter(str_detect(abbreviation, "PP")))
+
+vox_candidates <- vox_candidates |> 
+  bind_rows(vox_candidates, autonomical_candidates |> filter(str_detect(abbreviation, "VOX")))
+
+cs_candidates <- cs_candidates |> 
+  bind_rows(cs_candidates, cs_candidates_autonomical)
+
+```
+
+```{r}
+
+```
+
+```{r ADD SEX}
+# library(readxl)
+# hombres <- read_excel("nombres_por_edad_media.xlsx", sheet = "Hombres", skip = 6) |>
+#   rename(name = 2, freq = 3) |>
+#   transmute(name = as.character(name), freq = as.numeric(freq), sex_ine = "Male")
+# 
+# mujeres <- read_excel("nombres_por_edad_media.xlsx", sheet = "Mujeres", skip = 6) |>
+#   rename(name = 2, freq = 3) |>
+#   transmute(name = as.character(name), freq = as.numeric(freq), sex_ine = "Female")
+# 
+# ine_names <- bind_rows(hombres, mujeres) |>
+#   mutate(name = name |>
+#            str_to_upper() |>
+#            stringi::stri_trans_general("Latin-ASCII") |>
+#            str_remove_all("[^A-Z ]") |>
+#            str_squish()) |>
+#   filter(!is.na(name), name != "") |>
+#   group_by(name) |>
+#   slice_max(freq, n = 1, with_ties = FALSE) |>
+#   ungroup() |>
+#   select(name, sex_ine)
+# 
+# autonomical_candidates <- autonomical_candidates |>
+#   mutate(
+#     clean = candidate |>
+#       str_to_upper() |>
+#       stringi::stri_trans_general("Latin-ASCII") |>
+#       str_remove_all("[^A-Z ]") |>
+#       str_squish(),
+#     tok1 = word(clean, 1),
+#     tok2 = word(clean, 1, 2),
+#     tok3 = word(clean, 1, 3)
+#   ) |>
+#   left_join(rename(ine_names, s1 = sex_ine), by = c("tok1" = "name")) |>
+#   left_join(rename(ine_names, s2 = sex_ine), by = c("tok2" = "name")) |>
+#   left_join(rename(ine_names, s3 = sex_ine), by = c("tok3" = "name")) |>
+#   mutate(sex = coalesce(s3, s2, s1)) |>
+#   select(-clean, -tok1, -tok2, -tok3, -s1, -s2, -s3)
+
+```
+
+Added 103 changes manually in sex in excel.
+
+# MUNICIPAL ELECTIONS
+
+```{r READ ALL VOX MUNICIPAL CANDIDATES}
+# municipality -> province, from the INE list (one sheet per province). The key
+# ignores accents, case and the order of the bilingual halves, because the file
+# writes "Alicante/Alacant" and the INE "Alacant/Alicante".
+municipalities <- list()
+for (s in excel_sheets("26codmun.xlsx")) {
+  municipalities[[s]] <- read_excel("26codmun.xlsx", sheet = s, skip = 2,
+                                    col_types = "text") |>
+    filter(!is.na(CMUN)) |>
+    transmute(province_code = CPRO, municipality = NOMBRE)
+}
+municipalities <- bind_rows(municipalities) |>
+  left_join(provinces, by = "province_code") |>
+  mutate(muni_key = municipality |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  distinct(muni_key, province)
+
+municipal_vox <- readxl::read_xlsx("CANDIDATOS_MUNICIPALES.xlsx") |>
+  mutate(muni_key = CIRCUNSCRIPCION |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  left_join(municipalities, by = "muni_key") |>
+  transmute(
+    election      = ELECCION,
+    year          = as.integer(str_extract(ELECCION, "\\d{4}")),
+    chamber       = CIRCUNSCRIPCION,   # the municipality
+    province,                          # its province, from the INE list
+    list_position = as.integer(ORDEN),
+    candidate     = CANDIDATO,
+    is_elected    = ELEGIDO,
+    source        = FUENTE,
+    level         = "Municipal"
+  )
+# municipalities the INE list no longer carries under that name (it is dated
+# 1 January 2026 and these data reach 2015), assigned by hand
+manual_provinces <- tribble(
+  ~chamber,                       ~province_manual,
+  "Castell-Platja d'Aro",         "Girona",
+  "Sant Carles de la Ràpita",     "Tarragona",
+  "Moncada",                      "Valencia",
+  "Alfarp",                       "Valencia",
+  "Castelló de la Plana",         "Castellon",
+  "Guadiana del Caudillo",        "Badajoz",
+  "Maó-Mahón",                    "Illes Balears"
+)
+
+municipal_vox <- municipal_vox |>
+  left_join(manual_provinces, by = "chamber") |>
+  mutate(province = coalesce(province, province_manual)) |>
+  select(-province_manual)
+```
+
+```{r PP MUNICIPAL CANDIDATES}
+# PP candidates in the municipal elections. The ministry's file 04 for municipal
+# elections carries the municipality, and up to 2003 the name is in one field, so
+# read 26-100 as a single block: in the split layout the three fields are adjacent
+# and str_squish collapses the padding to the same result.
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+dir.create("datos_pp_locales", showWarnings = FALSE)
+
+cols_04_local <- fwf_cols(
+  province_code  = c( 10,  11),
+  muni_code      = c( 13,  15),   # 12 is a control digit
+  party_code     = c( 16,  21),
+  list_position  = c( 22,  24),
+  candidate_type = c( 25,  25),
+  full_name_cand = c( 26, 100),
+  sex            = c(101, 101),
+  elected        = c(120, 120)
+)
+
+# municipality names, one sheet per province
+municipalities <- list()
+for (s in excel_sheets("26codmun.xlsx")) {
+  municipalities[[s]] <- read_excel("26codmun.xlsx", sheet = s, skip = 2,
+                                    col_types = "text")
+}
+municipalities <- bind_rows(municipalities) |>
+  filter(!is.na(CMUN)) |>
+  transmute(province_code = CPRO, muni_code = CMUN, municipality = NOMBRE)
+
+local_candidates <- list()
+years <- c("2003", "2007", "2011", "2015", "2019", "2023")
+
+for (i in seq_along(years)) {
+
+  folder   <- str_c("04", years[i], "05_TOTA")
+  zip_file <- str_c("datos_pp_locales/", folder, ".zip")
+  unzip_to <- tempfile()
+
+  if (!file.exists(zip_file))
+    download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file, mode = "wb", quiet = TRUE)
+  unzip(zip_file, exdir = unzip_to)
+
+  path_03 <- list.files(unzip_to, "^03.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+  path_04 <- list.files(unzip_to, "^04.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+
+  # the full name is the reliable filter: many local parties are abbreviated PPx
+  # ("PPN" is Partido Progresista Nerjeño, "P.P.SO." Plataforma del Pueblo Soriano)
+  parties <- read_fwf(path_03, cols_03, locale = latin1,
+                      col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    filter(str_detect(stringi::stri_trans_general(str_to_upper(full_name),
+                                                  "Latin-ASCII"),
+                      "PARTIDO POPULAR|PARTIT POPULAR"))
+
+  message("Reading municipal ", years[i], " ...")
+
+  local_candidates[[i]] <- read_fwf(path_04, cols_04_local, locale = latin1,
+                                    col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    inner_join(parties, by = "party_code") |>
+    mutate(year = years[i])
+}
+
+municipal_pp <- bind_rows(local_candidates) |>
+  left_join(municipalities, by = c("province_code", "muni_code")) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c("municipal_", year, "_05"),
+    year          = as.integer(year),
+    chamber       = municipality,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = str_squish(full_name_cand),
+    sex           = recode(sex, "M" = "Male", "F" = "Female", .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation  = "PP",
+    level         = "Municipal"
+  ) |>
+  arrange(year, province, chamber, list_position)
+```
+
+```{r FILTER PP AND VOX CANDIDATES}
+pp_candidates <-
+  bind_rows(pp_candidates, municipal_pp)
+
+vox_candidates <-
+  bind_rows(vox_candidates, municipal_vox)
+
+```
+
+```{r ADD SEATS DISTRICT AND PARTY}
+seats_district <- all_candidates |>
+  filter(is_elected, is_titular = TRUE) |>
+  count(election, chamber, province, name = "seats_district")
+
+party_seats <- all_candidates |>
+  filter(is_elected, is_titular) |>
+  count(election, chamber, province, abbreviation, name = "seats_party")
+
+all_candidates <- all_candidates |>
+  left_join(seats_district,   by = c("election", "chamber", "province")) |>
+  left_join(party_seats, by = c("election", "chamber", "province", "abbreviation")) |>
+  mutate(seats_party = replace_na(seats_party, 0))
+```
+
+```{r NORMALIZE NAMES AND ELECTION DATE}
+vox_candidates <- vox_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+pp_candidates <- pp_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+cs_candidates <- cs_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+```
+
+```{r TABLE ELECTED NON ELECTED}
+vox_candidates |>
+  summarise(
+    total_candidates = n_distinct(person_id, na.rm = TRUE),
+    total_elected    = n_distinct(person_id[is_elected %in% TRUE], na.rm = TRUE)
+  ) 
+```
+
+```{r VOX CANDIDATES THAT COME FROM ALTERNATIVA DE GOVERN}
+read_csv("alternativa_de_govern_candidates.csv") |> 
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) |> 
+  mutate(from_alternativa = person_id %in% vox_candidates$person_id[!is.na(vox_candidates$person_id)]) |>
+  filter(from_alternativa == TRUE) |> 
+  select(candidate, chamber)
+  
+```
+
+```{r FROM PP VARIABLE}
+vox_candidates <- vox_candidates |>
+  mutate(from_pp = person_id %in% pp_candidates$person_id[!is.na(pp_candidates$person_id)])
+```
+
+Manual from PP
+
+```{r RADICAL RIGHT CANDIDATES}
+radical_right_candidates <- bind_rows(
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "01 Candidatos") |>
+    select(Partido, `Tipo de candidatura`, Candidato, Anyo, Nivel),
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "06 Autonomicas") |>
+    select(Partido, `Tipo de candidatura`, Candidato, Anyo, Calidad) |>
+    mutate(Nivel = "Autonomicas")) |>
+  mutate(person_id = Candidato |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+```
+
+```{r CS CANDIDATES}
+
+cs_candidates <- read_csv("candidatos_cs_autonomicas_2015_2026.csv", show_col_types = FALSE) |>
+  bind_rows(all_candidates |> filter(abbreviation == "C's")) |>
+  mutate(person_id = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+```
+
+```{r}
+# =============================================================================
+# People listed on the websites of the satellite organisations of VOX,
+# read from the Internet Archive. Pure R, ~2 minutes, writes one CSV.
+#
+# Two things keep it fast: only the pages that list people are asked for (one
+# CDX query per path prefix, collapsed by digest so that only real content
+# changes come back), and at most one capture per page and year is downloaded,
+# all of them in parallel.
+#
+# The date is the date of the CAPTURE, not of the appointment: the person was
+# listed on that page on that day, not necessarily appointed then.
+# =============================================================================
+
+library(tidyverse)
+library(httr2)
+library(rvest)
+library(readxl)
+
+# path prefixes that hold the team, the board, the faculty
+pages <- tribble(
+  ~organisation, ~prefix,
+  "DENAES",      "denaes.es/quienes-somos",
+  "Disenso",     "fundaciondisenso.org/nosotros",
+  "ISSEP",       "issep.es/nosotros",
+  "ISSEP",       "issep.es/profesores",
+  "HazteOir",    "hazteoir.org/conocenos",
+  "HazteOir",    "www.hazteoir.org/conocenos",
+  "CitizenGO",   "citizengo.org/es/conocenos",
+  "CitizenGO",   "www.citizengo.org/es/conocenos",
+  "CitizenGO",   "citizengo.org/en/about-us",
+  "Solidaridad", "sindicatosolidaridad.es/contacto"
+)
+
+# --- 1. what the Archive has --------------------------------------------------
+captures <- pages |>
+  mutate(cdx = map(prefix, \(p)
+    request("http://web.archive.org/cdx/search/cdx") |>
+      req_url_query(url = p, matchType = "prefix", output = "json",
+                    fl = "timestamp,original", collapse = "digest",
+                    filter = c("statuscode:200", "mimetype:text/html"),
+                    limit = 2000, .multi = "explode") |>
+      req_retry(max_tries = 3) |>
+      req_perform() |> resp_body_json() |>
+      (\(x) tibble(timestamp = map_chr(x[-1], 1), original = map_chr(x[-1], 2)))())) |>
+  unnest(cdx) |>
+  mutate(date = ymd(str_sub(timestamp, 1, 8)), year = year(date),
+         snapshot = str_c("https://web.archive.org/web/", timestamp, "id_/", original)) |>
+  # one capture per page and year is enough to follow who is on a board
+  slice_max(date, n = 1, by = c(original, year), with_ties = FALSE)
+
+# --- 2. download them in parallel ---------------------------------------------
+responses <- captures$snapshot |>
+  map(\(u) request(u) |> req_timeout(30) |> req_error(is_error = \(r) FALSE)) |>
+  req_perform_parallel(max_active = 5, on_error = "continue", progress = TRUE)
+
+lines <- captures |>
+  mutate(html = map_chr(responses, possibly(\(r) resp_body_string(r), NA_character_))) |>
+  filter(!is.na(html)) |>
+  # only the code is dropped. These sites wrap their content in <header> and
+  # <aside>, so removing those takes the board away with the menu; the census
+  # test below is what actually separates people from navigation.
+  mutate(text = map(html, \(h) {
+    page <- read_html(h)
+    page |> html_elements("script, style, noscript") |> xml2::xml_remove()
+    page |> html_elements("body") |> html_text2() |> str_split_1("\n") |> str_squish()
+  }), .keep = "unused") |>
+  unnest(text) |>
+  filter(text != "")
+
+# --- 3. which of those lines is a person --------------------------------------
+PARTICLES <- c("de", "del", "la", "las", "los", "y", "e", "da", "do", "van", "von", "i")
+
+# labels, menus and headlines the capitalisation rule would otherwise accept
+NOT_A_PERSON <- str_c(
+  "EQUIPO|CONSEJO|PATRONATO|DIRECCION|COMITE|JUNTA|FUNDACION|INSTITUTO|SINDICATO|",
+  "ASOCIACION|UNIVERSIT|SCIENCES PO|COLLEGE|SCHOOL|REVISTA|DIARIO|DIGEST|OBJECTIVE|",
+  "TELEVISION|NEWSLETTER|GACETA|BLOG|ESCUELA|CENTRO|OBSERVATORIO|PREMIO|PROGRAMA|",
+  "CURSO|JORNADA|CONGRESO|ESPANA|NACIONAL|INTERNACIONAL|MOVIMIENTO|INICIO|CONTACTO|",
+  "PRENSA|AGENDA|BOLETIN|TIENDA|AVISO|LEGAL|PRIVACIDAD|COOKIES|DISCURSO|ENTREVISTA|",
+  "ARTICULO|CONFERENCIA|PONENCIA|VIDEO|FOUNDATION|CAMPAIGN|MANAGER|IP ADDRESS|",
+  "SOBRE NOSOTROS|^LEER|^VER |^FISCAL|ENGLISH|ESPANOL|FRANCAIS|DEUTSCH|",
+  "ISSEP|DISENSO|CITIZENGO|HAZTEOIR|DENAES")
+
+# what may follow a name and be kept. The column is "role or description" on
+# purpose: these sites print a post ("Presidente") and a profession
+# ("Filosofo", "Pediatra") in exactly the same place
+ROLES <- str_c(
+  "PRESIDENT|VICEPRESIDENT|DIRECTOR|SECRETARI|TESORER|VOCAL|PATRON|COORDINADOR|",
+  "RESPONSABLE|GERENTE|PORTAVOZ|FUNDADOR|MIEMBRO|ASESOR|PROFESOR|CATEDRATIC|",
+  "DOCENTE|INVESTIGADOR|ANALISTA|CONSEJER|DELEGAD|ESCRITOR|PERIODISTA|FILOSOF|",
+  "HISTORIADOR|ABOGAD|ECONOMISTA|MILITAR|EMPRESARI|MAGISTRAD|SOCIOLOG|POLITOLOG|",
+  "JURISTA|DECANO|RECTOR|EDITOR|COLUMNISTA|DIPUTAD|SENADOR|EURODIPUTAD")
+
+flat <- function(x) str_to_upper(stringi::stri_trans_general(x, "Latin-ASCII"))
+
+# The real test of whether a line is a person: the INE census lists, which the
+# project already uses to assign sex to candidates. A word list of things that
+# are NOT names never ends; a list of the names that exist does.
+ine_forenames <- c("Hombres", "Mujeres") |>
+  map(\(s) read_excel("nombres_por_edad_media.xlsx", sheet = s, skip = 5)$Nombre) |>
+  list_c() |> flat() |> str_squish()
+
+# nicknames and rare forenames the census does not carry
+ALSO_PEOPLE <- c("CAKE", "EDMALY")
+
+# 2 to 6 words, all of them capitalised except the particles
+is_person <- function(x) {
+  capitalised <- map_lgl(str_split(x, " "), \(w) {
+    w <- w[!str_to_lower(flat(w)) %in% PARTICLES]
+    length(w) >= 2 && all(str_detect(w, "^\\p{Lu}\\p{L}"))
+  })
+  str_length(x) >= 5 & str_length(x) <= 60 &
+    str_count(x, "\\S+") >= 2 & str_count(x, "\\S+") <= 6 &
+    !str_detect(x, "[0-9@#/|]") & capitalised &
+    flat(word(x, 1)) %in% c(ine_forenames, ALSO_PEOPLE) &
+    !str_detect(flat(x), NOT_A_PERSON) & !str_detect(flat(x), ROLES)
+}
+
+people <- lines |>
+  # "Ignacio Arsuaga Rato, Presidente" is a person and their role on one line;
+  # without splitting it, the line is thrown away for containing "Presidente"
+  separate_wider_delim(text, ", ", names = c("person", "inline_role"),
+                       too_many = "merge", too_few = "align_start") |>
+  mutate(inline_role = replace_na(inline_role, ""),
+         # the other layout puts the role on the line below the name
+         next_line = lead(person), .by = c(organisation, original, timestamp)) |>
+  filter(is_person(person)) |>
+  mutate(role = case_when(
+           str_detect(flat(inline_role), ROLES) ~ inline_role,
+           str_detect(flat(next_line), ROLES) & str_length(next_line) <= 90 ~ next_line,
+           .default = ""),
+         # Disenso prints the same board in caps on one page and in title case
+         # on another: "AMANDO DE MIGUEL" and "Amando de Miguel" are one person
+         person = if_else(person == str_to_upper(person), str_to_title(person), person),
+         person = str_replace_all(person, str_c("(?<= )(", str_c(str_to_title(PARTICLES),
+                                                                 collapse = "|"), ")(?= )"),
+                                  str_to_lower))
+
+# the same person is listed with and without the second surname ("Ana Velasco",
+# "Ana Velasco Vidal-Abarca"): the longest form wins
+variants <- people |>
+  distinct(person) |>
+  # compound surnames are opened at the hyphen, so that "Alejo Vidal Quadras"
+  # falls inside "Alejo Vidal-Quadras Roca"
+  mutate(tokens = str_split(flat(person), "[ -]"), first = map_chr(tokens, 1))
+
+people <- variants |>
+  rename(long = person, long_tokens = tokens) |>
+  inner_join(rename(variants, short = person, short_tokens = tokens), by = "first",
+             relationship = "many-to-many") |>
+  filter(map2_lgl(short_tokens, long_tokens, \(s, l) all(s %in% l)),
+         lengths(short_tokens) <= lengths(long_tokens)) |>
+  slice_max(lengths(long_tokens), n = 1, by = short, with_ties = FALSE) |>
+  select(person = short, canonical = long) |>
+  right_join(people, by = "person") |>
+  mutate(person = coalesce(canonical, person)) |>
+  summarise(.by = c(organisation, person),
+            roles      = str_c(sort(unique(role[role != ""])), collapse = " | "),
+            first_seen = min(date),
+            last_seen  = max(date),
+            n_captures = n_distinct(timestamp),
+            source     = first(str_c("https://web.archive.org/web/", timestamp, "/", original))) |>
+  arrange(organisation, person)
+
+# --- 4. Solidaridad, from the BOE ---------------------------------------------
+# The union's website archives no team page, so its officers are taken from the
+# four announcements of the deposit of its statutes (Direccion General de
+# Trabajo, union SPDSTE, deposit number 99105954). Searched at boe.es for
+# SPDSTE in the title. Rafael Martinez de la Gandara, who signs all four, is
+# the civil servant issuing the resolution and is NOT part of the union.
+solidaridad_boe <- tribble(
+  ~person,                              ~roles,             ~date,        ~boe,
+  "Santiago Alarcón Gordon",            "Solicitante del depósito", "2020-08-12", "BOE-B-2020-26040",
+  "Paula Bernardina Hidalgo de la Cruz","Promotora",        "2020-08-12", "BOE-B-2020-26040",
+  "Raquel Moreno Barba",                "Promotora",        "2020-08-12", "BOE-B-2020-26040",
+  "Ángel García Ochoa",                 "Promotor",         "2020-08-12", "BOE-B-2020-26040",
+  "Santiago Alarcón Gordon",            "Solicitante del depósito", "2021-02-15", "BOE-B-2021-7089",
+  "Rodrigo Alonso Fernández",           "Secretario General", "2021-02-15", "BOE-B-2021-7089",
+  "Javier Tomás de la Cruz Bazo",       "Solicitante del depósito", "2025-05-23", "BOE-B-2025-18656",
+  "Jordi Albert de la Fuente Miró",     "Secretario General", "2025-05-23", "BOE-B-2025-18656",
+  "Javier Tomás de la Cruz Bazo",       "Solicitante del depósito", "2026-07-03", "BOE-B-2026-22639",
+  "Jordi Albert de la Fuente Miró",     "Secretario General", "2026-07-03", "BOE-B-2026-22639"
+) |>
+  summarise(.by = person,
+            organisation = "Solidaridad",
+            roles      = str_c(sort(unique(roles)), collapse = " | "),
+            first_seen = min(ymd(date)),
+            last_seen  = max(ymd(date)),
+            n_captures = n(),
+            source     = str_c("https://www.boe.es/diario_boe/txt.php?id=", first(boe)))
+
+people <- bind_rows(people, solidaridad_boe) |> arrange(organisation, person)
+
+people |> count(organisation, name = "people")
+
+# who sits in more than one of them
+people |>
+  summarise(.by = person, organisations = str_c(sort(unique(organisation)), collapse = " | "),
+            n = n_distinct(organisation)) |>
+  filter(n > 1) |>
+  arrange(desc(n), person)
+
+```
+
+```{r}
+people <- people |> 
+   mutate(person = person |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |> 
+  filter(!person %in% c("ADOLFO SUAREZ", "YA SOMOS", "SEGUNDO APELLIDO"))
+```
+
+```{r}
+# =============================================================================
+# Retention of VOX top candidates across regional, Congress and European elections
+#
+# "Top candidate" = head of a constituency list (position 1) in Congress and
+# regional elections. The European list is a single national list, so position 1
+# is one person per election: its top is widened to the first TOP_N_EU names.
+# =============================================================================
+
+# "Top candidate" = the first three names of each constituency list. Where an
+# election has a single constituency (European Parliament, or regions such as
+# Madrid, Murcia or La Rioja), that is simply the first three of that one list.
+TOP_N <- 3
+
+vox_top <- vox_candidates |>
+  filter(is_titular, !is.na(person_id)) |>
+  mutate(
+    arena = case_when(
+      chamber == "Congress"            ~ "Congress",
+      chamber == "European Parliament" ~ "European",
+      level   == "Autonomical"         ~ "Autonomical"
+    ),
+    cycle_date = ymd(str_c(str_extract(election, "\\d{4}_\\d{2}"), "_01"))
+  ) |>
+  filter(!is.na(arena), list_position <= TOP_N) |>
+  distinct(person_id, arena, election, cycle_date)
+
+# every VOX candidacy of any kind (municipal and Senate included), for the
+# broader question "had this person already stood for VOX before?"
+vox_any <- vox_candidates |>
+  filter(!is.na(person_id)) |>
+  mutate(any_date = ymd(str_c(str_extract(election, "\\d{4}_\\d{2}"), "_01"))) |>
+  distinct(person_id, any_date)
+
+# ----------------------------------------------------------------- 1. RECYCLING
+# of the top candidates of each election, how many had already been top
+# candidates (or any candidate) in an EARLIER election
+top_before <- vox_top |>
+  inner_join(vox_top |> select(person_id, prev_date = cycle_date),
+             by = join_by(person_id, cycle_date > prev_date)) |>
+  distinct(person_id, arena, election) |>
+  mutate(was_top_before = TRUE)
+
+any_before <- vox_top |>
+  inner_join(vox_any, by = join_by(person_id, cycle_date > any_date)) |>
+  distinct(person_id, arena, election) |>
+  mutate(was_candidate_before = TRUE)
+
+recycling <- vox_top |>
+  left_join(top_before, by = c("person_id", "arena", "election")) |>
+  left_join(any_before, by = c("person_id", "arena", "election")) |>
+  mutate(across(c(was_top_before, was_candidate_before), ~ coalesce(.x, FALSE))) |>
+  group_by(arena, election, cycle_date) |>
+  summarise(
+    top_candidates        = n(),
+    share_top_before      = mean(was_top_before),
+    share_candidate_before = mean(was_candidate_before),
+    .groups = "drop"
+  ) |>
+  arrange(cycle_date, arena)
+
+# ----------------------------------------------------------------- 2. RETENTION
+# of the top candidates of each election, how many are top candidates again in a
+# LATER election, in any of the three arenas
+top_later <- vox_top |>
+  inner_join(vox_top |> select(person_id, next_arena = arena, next_date = cycle_date),
+             by = join_by(person_id, cycle_date < next_date))
+
+retention <- vox_top |>
+  left_join(top_later |> distinct(person_id, arena, election) |> mutate(top_again = TRUE),
+            by = c("person_id", "arena", "election")) |>
+  mutate(top_again = coalesce(top_again, FALSE)) |>
+  group_by(arena, election, cycle_date) |>
+  summarise(top_candidates = n(), share_top_again = mean(top_again), .groups = "drop") |>
+  arrange(cycle_date, arena)
+
+# --------------------------------------------------------------- 3. TRANSITIONS
+# where do top candidates go next: arena of the earlier top candidacy (rows) by
+# arena of a later one (columns), counted in people
+transitions <- top_later |>
+  distinct(person_id, arena, next_arena) |>
+  count(arena, next_arena) |>
+  pivot_wider(names_from = next_arena, values_from = n, values_fill = 0)
+
+# --------------------------------------------------------------------- 4. PLOT
+recycling |>
+  ggplot(aes(cycle_date, share_top_before, colour = arena)) +
+  geom_line() +
+  geom_point(aes(size = top_candidates)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Top candidates already top candidates before",
+       colour = NULL, size = "Top candidates") +
+  theme_minimal()
+
+recycling
+retention
+transitions
+```
+
+```{r IMPLANTACION TERRITORIAL VOX}
+vox_candidates |>
+  filter(chamber == "Congress") |>
+  distinct(election, province) |>
+  count(election, name = "constituencies_contested")
+```
+```{r}
+library(mapSpain)
+library(sf)
+
+END_YEAR <- 2019   # include 2019 to see the jump after Andalusia; 2018 to stop before
+
+# ------------------------------------------------------ province -> region lookup
+prov_lookup <- provinces |>
+  filter(province_code != "99") |>
+  left_join(esp_codelist |> distinct(cpro, ccaa = ccaa.shortname.es),
+            by = c("province_code" = "cpro")) |>
+  mutate(prov_key = province |> str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII"))
+
+# ------------------------------------ every list Vox presented, by constituency
+presence <- bind_rows(
+  vox_candidates |>
+    filter(chamber == "Congress" | level == "Autonomical") |>
+    transmute(election,
+              type = if_else(chamber == "Congress", "Congress", "Regional"),
+              province, unit = province),
+  municipal_vox |>
+    transmute(election, type = "Municipal", province, unit = chamber)
+) |>
+  mutate(
+    date_lab = str_replace(str_extract(election, "\\d{4}_\\d{2}"), "_", "-"),
+    year     = as.integer(str_sub(date_lab, 1, 4)),
+    key      = province |> str_to_upper() |>
+                 stringi::stri_trans_general("Latin-ASCII") |> str_squish(),
+    # regional constituencies that are not provinces: islands, districts
+    prov_key = case_when(
+      str_detect(key, "ALAVA|ARABA")                                   ~ "ARABA/ALAVA",
+      str_detect(key, "ASTURIAS") | key %in% c("CENTRO", "OCCIDENTE", "ORIENTE") ~ "ASTURIAS",
+      key %in% c("MALLORCA", "MENORCA", "EIVISSA", "IBIZA", "FORMENTERA",
+                 "BALEARES")                                           ~ "ILLES BALEARS",
+      key %in% c("GRAN CANARIA", "LANZAROTE", "FUERTEVENTURA")         ~ "LAS PALMAS",
+      key %in% c("TENERIFE", "LA PALMA", "LA GOMERA", "EL HIERRO",
+                 "SANTA CRUZ DE TENERIFE")                             ~ "S.C. TENERIFE",
+      key %in% c("PRIMERA", "SEGUNDA", "TERCERA", "CUARTA", "QUINTA",
+                 "REGION DE MURCIA")                                   ~ "MURCIA",
+      key == "COMUNIDAD DE MADRID"                                     ~ "MADRID",
+      key == "VIZCAYA"   ~ "BIZKAIA",  key == "GUIPUZCOA" ~ "GIPUZKOA",
+      key == "GERONA"    ~ "GIRONA",   key == "LERIDA"    ~ "LLEIDA",
+      key == "ORENSE"    ~ "OURENSE",  key == "LA CORUNA" ~ "A CORUNA",
+      TRUE ~ key
+    )
+  ) |>
+  left_join(prov_lookup |> select(prov_key, province_code, province_label = province, ccaa),
+            by = "prov_key")
+
+# constituencies that could not be placed in a province (should be very few)
+presence |> filter(is.na(province_code)) |> distinct(type, province)
+
+# ----------------------------------------------------------- 1. presence matrix
+lists_count <- presence |>
+  filter(!is.na(province_code), year <= END_YEAR) |>
+  group_by(type, date_lab, province_label) |>
+  summarise(lists = n_distinct(unit), .groups = "drop")
+
+tiles <- lists_count |>
+  distinct(type, date_lab) |>
+  cross_join(prov_lookup |> select(ccaa, province_label = province)) |>
+  left_join(lists_count, by = c("type", "date_lab", "province_label")) |>
+  mutate(type = factor(type, levels = c("Municipal", "Regional", "Congress")))
+
+
+
+# ------------------------------------------ 2. year Vox first stood in each province
+entry <- presence |>
+  filter(!is.na(province_code)) |>
+  group_by(type, province_code) |>
+  summarise(first_year = min(year), .groups = "drop")
+
+library(cowplot)
+library(mapSpain)
+library(sf)
+
+types       <- c("Municipal", "Regional", "Congress")
+year_levels <- as.character(sort(unique(entry$first_year)))
+# qualitative palette: one distinct colour per year (Okabe-Ito, colour-blind safe)
+fill_values <- setNames(c(palette.colors(length(year_levels) + 1, "Okabe-Ito")[-1],
+                          "grey90"),
+                        c(year_levels, "Never"))
+
+maps_facet <- map(.x = types,
+                  .f = function(x) esp_get_prov(epsg = "3857") %>%
+                    left_join(entry %>% filter(type == x),
+                              by = c("cpro" = "province_code")) %>%
+                    mutate(type       = x,
+                           first_year = replace_na(as.character(first_year), "Never")) %>%
+                    ggplot(aes(fill = first_year)) +
+                    geom_sf(colour = "white", linewidth = 0.15, show.legend = TRUE) +
+                    geom_sf(data = esp_get_can_box(epsg = "3857"),
+                            inherit.aes = FALSE, fill = NA, colour = "grey60") +
+                    scale_fill_manual(values = fill_values,
+                                      limits = names(fill_values),
+                                      name = 'First Vox\ncandidacy') +
+                    facet_wrap(~type) +
+                    theme_minimal() +
+                    theme(axis.text = element_blank(),
+                          axis.ticks = element_blank(),
+                          panel.grid = element_blank()))
+
+vox_entry_maps <- plot_grid(plotlist = c(map(.x = maps_facet,
+                                             .f = function(x) x + theme(legend.position = 'none')),
+                                         list(get_legend(maps_facet[[1]]))),
+                            nrow = 2)
+
+vox_entry_maps
+save_plot("vox_entry_maps.png", vox_entry_maps, base_width = 9, base_height = 7)
+
+# ------------------------------------------------------- the Basque case, in figures
+tiles |> filter(ccaa == "País Vasco", !is.na(lists)) |> arrange(type, date_lab)
+```
+
+
+
+```{r MAPA CONCEJALES PRE-2018}
+library(mapSpain)
+library(sf)
+
+# ------------------------------------------------ elected officials before 2018
+# municipal_vox has no abbreviation column, so it does not reach vox_candidates:
+# take it directly and stack it with the national and regional candidacies
+elected_pre2018 <- bind_rows(
+  vox_candidates |>
+    filter(level != "Municipal") |>
+    transmute(election, year, level, chamber, province, candidate,
+              is_elected = as.logical(is_elected)),
+  municipal_vox |>
+    transmute(election, year, level, chamber, province, candidate,
+              is_elected = as.logical(is_elected))
+) |>
+  filter(is_elected, year < 2018)
+
+# check: before 2018 everything should be municipal
+elected_pre2018 |> count(level, election)
+
+# ------------------------------------------------- municipality -> INE code
+# matched on name AND province, so that names repeated across provinces
+# (Mieres, Torrent, Sada...) go to the right municipality
+muni_codes <- list()
+for (s in excel_sheets("26codmun.xlsx")) {
+  muni_codes[[s]] <- read_excel("26codmun.xlsx", sheet = s, skip = 2,
+                                col_types = "text") |>
+    filter(!is.na(CMUN)) |>
+    transmute(province_code = CPRO, LAU_CODE = str_c(CPRO, CMUN),
+              municipality = NOMBRE)
+}
+muni_codes <- bind_rows(muni_codes) |>
+  left_join(provinces, by = "province_code") |>
+  mutate(muni_key = municipality |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  select(LAU_CODE, muni_key, province)
+
+councillors <- elected_pre2018 |>
+  filter(level == "Municipal") |>
+  mutate(muni_key = chamber |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  left_join(muni_codes, by = c("muni_key", "province")) |>
+  count(LAU_CODE, municipality = chamber, province, name = "councillors")
+
+# any municipality that could not be placed on the map
+councillors |> filter(is.na(LAU_CODE))
+
+map_points <- esp_get_munic(epsg = "3857") |>
+  mutate(LAU_CODE = str_c(cpro, cmun)) |>
+  inner_join(councillors |> select(LAU_CODE, municipality, councillors),
+             by = "LAU_CODE") |>
+  st_set_agr("constant") |>          # silences the "attributes constant" warning
+  st_point_on_surface()
+
+# plain X/Y columns for the labels, whatever the geometry column is called
+map_labels <- map_points |>
+  bind_cols(as_tibble(st_coordinates(map_points))) |>
+  st_drop_geometry()
+
+ggplot() +
+  geom_sf(data = esp_get_prov(epsg = "3857"),
+          fill = "grey96", colour = "grey75", linewidth = 0.2) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), colour = "grey60") +
+  geom_sf(data = map_points, aes(size = councillors),
+          colour = "#5BC035", alpha = 0.85) +
+  ggrepel::geom_text_repel(
+    data = map_labels,
+    aes(x = X, y = Y, label = municipality),
+    size = 2.6, min.segment.length = 0
+  ) +
+  scale_size_area(max_size = 6, breaks = c(1, 2, 3)) +
+  labs(title    = "Vox elected officials before 2018",
+       subtitle = "Municipal councillors elected in the May 2015 local elections",
+       size     = "Councillors",
+       caption  = "Source: Ministerio del Interior; boundaries: IGN / mapSpain") +
+  theme_void() +
+  theme(legend.position = "bottom")
+
+```
+
+```{r}
+# ----------------------------------------------- sex, imputed where it is missing
+# municipal_vox carries no sex column, and several general elections (2016 among
+# them) have the sex field empty in the ministry's files: fill those from the INE
+# forename tables, assigning a sex only when one is at least 15 times more common
+ine_sex <- bind_rows(
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Hombres", skip = 5,
+             col_types = "text") |> select(token = 2, n = 3) |> mutate(sex_ine = "Male"),
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Mujeres", skip = 5,
+             col_types = "text") |> select(token = 2, n = 3) |> mutate(sex_ine = "Female")
+) |>
+  mutate(token = str_to_upper(stringi::stri_trans_general(token, "Latin-ASCII")),
+         n = as.numeric(n)) |>
+  filter(!is.na(token), !is.na(n)) |>
+  pivot_wider(names_from = sex_ine, values_from = n, values_fn = sum, values_fill = 0) |>
+  mutate(sex_ine = case_when(Male   >= 15 * Female ~ "Male",
+                             Female >= 15 * Male   ~ "Female")) |>
+  select(token, sex_ine)
+
+women_data <- bind_rows(
+  vox_candidates |>
+    filter(level != "Municipal") |>
+    transmute(election, year, candidate, sex, is_titular,
+              is_elected = as.logical(is_elected),
+              type = case_when(chamber == "European Parliament" ~ "European",
+                               chamber == "Congress"            ~ "Congress",
+                               chamber == "Senate"              ~ "Senate",
+                               level   == "Autonomical"         ~ "Regional")),
+  municipal_vox |>
+    transmute(election, year, candidate, sex = NA_character_, is_titular = TRUE,
+              is_elected = as.logical(is_elected), type = "Municipal")
+) |>
+  mutate(clean = candidate |> str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |> str_squish(),
+         tok2 = word(clean, 1, 2),     # compound forenames: MARIA CARMEN
+         tok1 = word(clean, 1)) |>
+  left_join(rename(ine_sex, sex_2 = sex_ine), by = c("tok2" = "token")) |>
+  left_join(rename(ine_sex, sex_1 = sex_ine), by = c("tok1" = "token")) |>
+  mutate(sex_source = if_else(is.na(sex), "INE", "official"),
+         sex        = coalesce(sex, sex_2, sex_1)) |>
+  filter(is_titular) |>
+  select(election, year, type, candidate, sex, sex_source, is_elected)
+
+# how much had to be imputed, and how much is still unknown
+women_data |> count(type, sex_source, known = !is.na(sex))
+
+# -------------------------------------------------------- W1, W2: overall
+women_data |>
+  filter(!is.na(sex)) |>
+  summarise(candidates       = n(),
+            women_candidates = mean(sex == "Female"),                    # W1
+            elected          = sum(is_elected, na.rm = TRUE),
+            women_elected    = mean(sex[is_elected %in% TRUE] == "Female")) # W2
+
+# ------------------------------------------------ W3, W4: by type and election
+women_gap <- women_data |>
+  filter(!is.na(sex)) |>
+  group_by(type, election, year) |>
+  summarise(candidates       = n(),
+            elected          = sum(is_elected, na.rm = TRUE),
+            women_candidates = mean(sex == "Female"),
+            women_elected    = if_else(elected > 0,
+                                       mean(sex[is_elected %in% TRUE] == "Female"),
+                                       NA_real_),
+            gap              = women_candidates - women_elected,
+            .groups = "drop") |>
+  arrange(year)
+
+women_gap |> filter(elected >= 10) |> arrange(desc(gap))                # W3, W4
+
+# ------------------------------------------------------------------- figure
+women_gap |>
+  filter(elected >= 10) |>
+  ggplot(aes(y = reorder(election, year))) +
+  geom_segment(aes(x = women_elected, xend = women_candidates, yend = election),
+               colour = "grey70") +
+  geom_point(aes(x = women_candidates, colour = "All candidates"), size = 2.5) +
+  geom_point(aes(x = women_elected,    colour = "Elected"),        size = 2.5) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", colour = "grey60") +
+  scale_x_continuous(labels = scales::percent, limits = c(0, 0.6)) +
+  scale_colour_manual(values = c("All candidates" = "#E69F00", "Elected" = "#0072B2")) +
+  facet_grid(type ~ ., scales = "free_y", space = "free_y") +
+  labs(x = "Share of women", y = NULL, colour = NULL,
+       title = "Women among Vox candidates and elected officials") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+
+```{r}
+library(tidyverse)
+library(ggbump)
+
+# ---- data: every VOX candidacy ----------------------------------------------
+
+founders <- vox_candidates |>
+  filter(chamber == "European Parliament", year == 2014) |>
+  arrange(list_position) |>
+  distinct(person_id, .keep_all = TRUE) |>
+  transmute(person_id, candidate = str_to_title(candidate), pos_2014 = list_position)
+
+best_later <- bind_rows(
+  vox_candidates |> filter(chamber == "Congress", is_titular) |> mutate(stop = "Congress"),
+  vox_candidates |> filter(level == "Autonomical")            |> mutate(stop = "Regional"),
+  vox_candidates |> filter(level == "Municipal")              |> mutate(stop = "Municipal")
+) |>
+  filter(person_id %in% founders$person_id) |>
+  group_by(person_id, stop) |>
+  summarise(best = min(list_position), .groups = "drop")
+
+# ---- layout -----------------------------------------------------------------
+stops   <- c("2014 European list", "Congress", "Regional", "Municipal")
+stayers <- unique(best_later$person_id)
+n_total <- nrow(founders)
+n_stay  <- length(stayers)
+
+stop1 <- founders |>
+  transmute(person_id, candidate, stop = stops[1], best = pos_2014, y = pos_2014)
+
+# later stops: only who stood there, ranked by best position (ties: 2014 position)
+later <- best_later |>
+  left_join(founders, by = "person_id") |>
+  group_by(stop) |>
+  arrange(best, pos_2014, .by_group = TRUE) |>
+  mutate(y = row_number() * 2 - 1) |>
+  ungroup() |>
+  select(-pos_2014)
+
+heads <- best_later |> filter(best == 1) |> distinct(person_id) |> pull(person_id)
+
+pal <- setNames(c("#D55E00", "#0072B2", "#CC79A7", "#E69F00", "#009E73", "#56B4E9",
+                  "#882255", "#44AA99", "#999933", "#AA4499")[seq_along(heads)], heads)
+
+bump <- bind_rows(stop1, later) |>
+  mutate(x      = match(stop, stops),
+         stayed = person_id %in% stayers,
+         col    = if_else(person_id %in% heads, person_id, "other"))
+
+lines     <- filter(bump, stayed)
+last_stop <- lines |> group_by(person_id) |> filter(x == max(x)) |> ungroup()
+
+# ---- plot -------------------------------------------------------------------
+ggplot(lines, aes(x, y, group = person_id)) +
+  geom_bump(data = filter(lines, col == "other"), colour = "grey80", linewidth = 0.7, smooth = 8) +
+  geom_bump(data = filter(lines, col != "other"), aes(colour = col), linewidth = 1.3, smooth = 8) +
+  geom_point(data = filter(bump, !stayed), colour = "grey88", size = 1.8) +
+  geom_point(data = filter(lines, x == 1, col == "other"), colour = "grey65", size = 2) +
+  geom_point(data = filter(lines, x == 1, col != "other"), aes(colour = col), size = 2.8) +
+  geom_point(data = filter(lines, x > 1, col == "other"), colour = "grey65", size = 5.5) +
+  geom_point(data = filter(lines, x > 1, col != "other"), aes(colour = col), size = 5.5) +
+  geom_text(data = filter(lines, x > 1), aes(label = best),
+            colour = "white", size = 2.3, fontface = "bold") +
+  geom_text(data = filter(bump, x == 1),
+            aes(x = 0.93, label = str_c(best, ". ", candidate),
+                colour = if_else(stayed, col, "gone")),
+            hjust = 1, size = 2.5) +
+  geom_label(data = last_stop,
+             aes(x = x + 0.08, label = candidate, colour = if_else(col == "other", "lab", col)),
+             hjust = 0, size = 2.5, fill = "white", label.size = 0,
+             label.padding = unit(0.1, "lines")) +
+  annotate("text", x = 0.93, y = n_total + 2.5, hjust = 1, vjust = 1, size = 3, colour = "grey45",
+           label = str_c(n_total - n_stay, " of the ", n_total,
+                         " founders (light grey) never stood for Vox again")) +
+  scale_colour_manual(values = c(pal, other = "grey45", gone = "grey75", lab = "grey35")) +
+  scale_y_reverse(expand = expansion(add = c(3, 1))) +
+  scale_x_continuous(breaks = 1:4, position = "top",
+                     labels = c("2014 European\nlist", "Congress\n(best list position)",
+                                "Regional\n(best list position)", "Municipal\n(best list position)"),
+                     expand = expansion(add = c(1.6, 1.3))) +
+  labs(title = "Founders: who is left from the first 2014 election",
+       subtitle = "Each line only passes through the types of election the founder later stood in. Number = best list position. Coloured: founders who later headed a list.",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(face = "bold", colour = "grey25"),
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(colour = "grey40", size = 9))
+
+ggsave("founders_bump.png", width = 13, height = 11, dpi = 300, bg = "white")
+```
+```{r}
+vox_candidates |> 
+  filter(election == "general_2019_04") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(election == "general_2019_11") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(election == "municipales_2019_05") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(election == "general_2023_07") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(election == "municipales_2023_05") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(election == "autonomous_2019_04" | election == "autonomous_2019_05") |> 
+  filter(is_elected == TRUE) |> 
+  distinct(person_id) |> 
+  count()
+
+vox_candidates |> 
+  filter(is_elected == TRUE) |> 
+  filter(str_detect(election, "autonomous")) |> 
+  filter(election != "autonomous_2019_04" | election != "autonomous_2019_05" | election != "autonomous_2018_12" | election != "autonomous_2019_05") |> 
+  
+  distinct(person_id) |> 
+  count()
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1. Una fila por persona-elección, con el tramo de lista
+gen <- vox_candidates |>
+  filter(election == "Congress", !is.na(person_id), !is.na(list_position)) |>
+  distinct(person_id, year, province, list_position) |>
+  mutate(
+    tier = case_when(
+      list_position == 1 ~ "Head of list",
+      list_position <= 3 ~ "Positions 2-3",
+      TRUE               ~ "Rest of list"
+    ),
+    tier = factor(tier, levels = c("Rest of list", "Positions 2-3", "Head of list"))
+  )
+
+# 2. Pares de convocatorias consecutivas
+years <- sort(unique(gen$year))
+pairs <- tibble(year_prev = head(years, -1), year_next = tail(years, -1))
+
+# 3. Para cada cohorte en t-1, ¿quién vuelve en t y en qué puesto?
+retention_tier <- pairs |>
+  inner_join(gen, by = c("year_prev" = "year"), relationship = "many-to-many") |>
+  left_join(
+    gen |> select(person_id, year, pos_next = list_position, prov_next = province),
+    by = c("person_id", "year_next" = "year")
+  ) |>
+  summarise(
+    n_cohort        = n(),
+    retention       = mean(!is.na(pos_next)),
+    stayed_head     = mean(pos_next == 1, na.rm = TRUE),
+    changed_prov    = mean(prov_next != province, na.rm = TRUE),
+    .by = c(year_prev, year_next, tier)
+  ) |>
+  arrange(year_prev, desc(tier))
+
+retention_tier
+```
+
+```{r}
+vox_candidates |> head(2) |> 
+  print()
+```
+
+```{r NETWORK ANALYSIS}
+vox_candidates <- vox_candidates |>
+  mutate(
+    from_cs = person_id %in% cs_candidates$person_id[!is.na(cs_candidates$person_id)],
+    from_radical_right = person_id %in% radical_right_candidates$person_id[!is.na(radical_right_candidates$person_id)])
+
+vox_candidates |>
+  group_by(from_pp, from_cs, from_radical_right) |>
+  summarise(n = n(),
+            mean_list_position = mean(list_position, na.rm = TRUE),
+            median_list_position = median(list_position, na.rm = TRUE),
+            .groups = "drop") |>
+  arrange(desc(n))
+
+# one row per person and party they ran for: the edge list of the network
+affiliations <- bind_rows(
+  vox_candidates |> distinct(person_id) |> mutate(party = "VOX"),
+  pp_candidates |> distinct(person_id) |> mutate(party = "PP"),
+  cs_candidates |> distinct(person_id) |> mutate(party = "Cs"),
+  radical_right_candidates |> distinct(person_id, Partido) |> rename(party = Partido)) |>
+  filter(!is.na(person_id), person_id != "")
+
+# people who ran for more than one party
+movers <- affiliations |>
+  group_by(person_id) |>
+  filter(n_distinct(party) > 1) |>
+  ungroup()
+
+# party-to-party edges, weighted by how many people they share
+party_edges <- movers |>
+  inner_join(movers, by = "person_id", relationship = "many-to-many") |>
+  filter(party.x < party.y) |>
+  count(party.x, party.y, name = "weight") |>
+  arrange(desc(weight))
+
+party_edges |> filter(party.y == "VOX")
+```
+
+```{r PP AND VOX NAME VERIFICATOR ONLY SAME_PROVINCE}
+
+# The overlap between PP and VOX is matched on the normalised name, so common
+# names produce false positives. The INE publishes forename and surname
+# frequencies: assuming independence, the expected number of people in Spain
+# carrying that exact combination gives a triage order for manual review.
+# The file is https://www.ine.es/daco/daco42/nombyapel/apellidos_frecuencia.xls
+SPAIN <- 47.4e6
+
+surnames <- read_excel("apellidos_frecuencia.xls",
+                       sheet = "Apellidos >=100", skip = 4,
+                       col_types = "text") |>          # the file uses ".." for
+  select(token = 2, n = 3) |>                          # suppressed values
+  transmute(token = str_to_upper(stringi::stri_trans_general(token, "Latin-ASCII")),
+            n_surname = as.numeric(n)) |>
+  filter(!is.na(token), !is.na(n_surname)) |>
+  group_by(token) |> summarise(n_surname = max(n_surname), .groups = "drop")
+
+forenames <- bind_rows(
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Hombres", skip = 5,
+             col_types = "text") |> select(token = 2, n = 3),
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Mujeres", skip = 5,
+             col_types = "text") |> select(token = 2, n = 3)) |>
+  transmute(token = str_to_upper(stringi::stri_trans_general(token, "Latin-ASCII")),
+            n_forename = as.numeric(n)) |>
+  filter(!is.na(token), !is.na(n_forename)) |>
+  group_by(token) |> summarise(n_forename = sum(n_forename), .groups = "drop")
+
+# one row per party with where and when the person stood, so the context itself
+# tells you whether it is plausibly the same individual
+pp_context <- pp_candidates |>
+  filter(!is.na(person_id)) |>
+  group_by(person_id) |>
+  summarise(pp_years  = str_c(sort(unique(year)), collapse = ", "),
+            pp_places = str_c(sort(unique(province)), collapse = ", "),
+            .groups = "drop")
+
+vox_context <- vox_candidates |>
+  filter(!is.na(person_id)) |>
+  group_by(person_id) |>
+  summarise(vox_years  = str_c(sort(unique(year)), collapse = ", "),
+            vox_places = str_c(sort(unique(province)), collapse = ", "),
+            .groups = "drop")
+
+homonym_review <- inner_join(pp_context, vox_context, by = "person_id") |>
+  mutate(tok = str_split(person_id, " "),
+         surname_2 = map_chr(tok, ~ .x[length(.x)]),
+         surname_1 = map_chr(tok, ~ .x[length(.x) - 1]),
+         forename  = map_chr(tok, ~ str_c(.x[1:(length(.x) - 2)], collapse = " "))) |>
+  select(-tok) |>
+  left_join(forenames, by = c("forename"  = "token")) |>
+  left_join(rename(surnames, n_surname_1 = n_surname), by = c("surname_1" = "token")) |>
+  left_join(rename(surnames, n_surname_2 = n_surname), by = c("surname_2" = "token")) |>
+  mutate(
+    expected_bearers = round(n_forename * n_surname_1 * n_surname_2 / SPAIN^2, 2),
+    same_province    = pp_places == vox_places,
+    verdict          = NA_character_          # fill in by hand
+  ) |>
+  arrange(desc(expected_bearers)) |>
+  select(person_id, expected_bearers, same_province,
+         pp_years, pp_places, vox_years, vox_places, verdict) |> 
+  filter(same_province == TRUE)
+
+# write_csv(homonym_review, "homonym_review.csv")
+# homonym_review
+```
+
+```{r NEWCOMER VARIABLE}
+vox_candidates <- vox_candidates |> 
+   group_by(person_id) |>
+  mutate(
+    appearance    = dense_rank(election_date),   # not row_number: someone can
+    is_newcomer   = appearance == 1,             # run for Congress + Senate
+    prev_position = lag(list_position, order_by = election_date),
+    prev_elected  = lag(is_elected,    order_by = election_date)
+  ) |>
+  ungroup()
+```
+
+```{r}
+
+```
+
+```{r ADD WHO WAS IN PP OR OTHER PARTIES BEFORE (NOT NEWCOMER)}
+
+```
+
+```{r}
+library(readxl)
+
+# --- 1. leer los dos ficheros de resultados provinciales ------------------
+results <- list()
+
+for (f in c("PROV_02_201606_1.xlsx", "PROV_02_201904_1.xlsx")) {
+
+  raw <- read_excel(f, sheet = "Circunscripciones", col_names = FALSE)
+
+  type_i  <- which(rowSums(raw == "Votos", na.rm = TRUE) > 0)[1]
+  party_i <- type_i - 1
+
+  party_row <- str_squish(as.character(unlist(raw[party_i, ])))
+  type_row  <- str_squish(as.character(unlist(raw[type_i, ])))
+  body      <- raw[(type_i + 1):nrow(raw), ]
+
+  votes_cols <- which(type_row == "Votos"     & !is.na(party_row))
+  seats_cols <- which(type_row == "Diputados" & !is.na(party_row))
+
+  votes_long <- bind_cols(
+      tibble(province = str_squish(as.character(body[[3]]))),
+      set_names(body[votes_cols], party_row[votes_cols])
+    ) |>
+    pivot_longer(-province, names_to = "abbreviation", values_to = "votes")
+
+  seats_long <- bind_cols(
+      tibble(province = str_squish(as.character(body[[3]]))),
+      set_names(body[seats_cols], party_row[seats_cols])
+    ) |>
+    pivot_longer(-province, names_to = "abbreviation", values_to = "seats")
+
+  results[[f]] <- left_join(votes_long, seats_long,
+                            by = c("province", "abbreviation")) |>
+    mutate(
+      votes    = as.numeric(votes),
+      seats    = as.numeric(seats),
+      province = province |>
+        stringi::stri_trans_general("Latin-ASCII") |>
+        str_squish(),
+      base_election = if_else(str_detect(f, "201606"),
+                              "general_2016_06", "general_2019_04")
+    ) |>
+    filter(votes > 0)
+}
+
+results <- bind_rows(results)
+
+# --- 2. magnitud de cada circunscripcion ---------------------------------
+magnitude <- results |>
+  filter(base_election == "general_2019_04") |>
+  group_by(province) |>
+  summarise(magnitude = sum(seats), .groups = "drop")
+
+# --- 3. escenarios de voto nacional de VOX -------------------------------
+# marzo 2019: la referencia es 2016 (VOX partia de casi cero)
+# octubre 2019: la referencia es abril 2019 (VOX ya tenia 10,3% real)
+scenarios <- bind_rows(
+  tibble(moment = "march_2019",   base_election = "general_2016_06",
+         vox_nat = c(0.08, 0.10, 0.12, 0.14)),
+  tibble(moment = "october_2019", base_election = "general_2019_04",
+         vox_nat = c(0.08, 0.10, 0.12, 0.14))
+)
+
+# --- 4. proyeccion: swing uniforme, renormalizando el resto --------------
+others <- results |>
+  filter(abbreviation != "VOX") |>
+  group_by(base_election, province) |>
+  mutate(share_others = votes / sum(votes)) |>
+  ungroup() |>
+  select(base_election, province, abbreviation, share_others)
+
+expected <- bind_rows(
+  left_join(others, scenarios, by = "base_election",
+            relationship = "many-to-many") |>
+    mutate(share_exp = share_others * (1 - vox_nat)),
+  left_join(distinct(others, base_election, province), scenarios,
+            by = "base_election", relationship = "many-to-many") |>
+    mutate(abbreviation = "VOX", share_exp = vox_nat)
+)
+
+# --- 5. D'Hondt -----------------------------------------------------------
+seats_exp <- expected |>
+  left_join(magnitude, by = "province") |>
+  filter(share_exp >= 0.03) |>
+  mutate(divisor = map(magnitude, seq_len)) |>
+  unnest(divisor) |>
+  mutate(quotient = share_exp / divisor) |>
+  group_by(moment, vox_nat, province) |>
+  arrange(desc(quotient), .by_group = TRUE) |>
+  filter(row_number() <= magnitude) |>
+  count(moment, vox_nat, province, abbreviation, name = "seats") |>
+  ungroup()
+
+vox_expected <- seats_exp |>
+  filter(abbreviation == "VOX") |>
+  select(-abbreviation) |>
+  pivot_wider(names_from = vox_nat, values_from = seats, values_fill = 0) |>
+  arrange(moment, province)
+
+vox_expected
+
+# --- 6. comprobaciones ----------------------------------------------------
+count(results, base_election)
+n_distinct(results$province)          # deben ser 52
+sum(magnitude$magnitude)              # debe dar 350
+anti_join(magnitude, distinct(all_candidates, province), by = "province")
+```
+
+```{r}
+library(readxl)
+
+# --- 1. leer los dos ficheros de resultados provinciales ------------------
+results <- list()
+
+for (f in c("PROV_02_201606_1.xlsx", "PROV_02_201904_1.xlsx")) {
+
+  m <- as.matrix(read_excel(f, sheet = "Circunscripciones",
+                            col_names = FALSE, .name_repair = "minimal"))
+  mode(m) <- "character"
+
+  hits    <- which(m == "Votos", arr.ind = TRUE)
+  type_i  <- min(hits[, "row"])
+  party_i <- type_i - 1
+
+  party_row <- str_squish(m[party_i, ])
+  type_row  <- str_squish(m[type_i, ])
+
+  votes_cols <- which(type_row == "Votos" & !is.na(party_row))
+  seats_cols <- votes_cols + 1
+
+  stopifnot(length(votes_cols) > 0,
+            all(type_row[seats_cols] == "Diputados"))
+
+  body_rows <- (type_i + 1):nrow(m)
+
+  province <- m[body_rows, 3] |>
+    stringi::stri_trans_general("Latin-ASCII") |>
+    str_squish() |>
+    str_replace("^Araba.*", "Araba")
+
+  votes_m <- m[body_rows, votes_cols, drop = FALSE]
+  seats_m <- m[body_rows, seats_cols, drop = FALSE]
+  colnames(votes_m) <- party_row[votes_cols]
+  colnames(seats_m) <- party_row[votes_cols]
+
+  votes_long <- as_tibble(votes_m, .name_repair = "unique") |>
+    mutate(province = province) |>
+    pivot_longer(-province, names_to = "abbreviation", values_to = "votes")
+
+  seats_long <- as_tibble(seats_m, .name_repair = "unique") |>
+    mutate(province = province) |>
+    pivot_longer(-province, names_to = "abbreviation", values_to = "seats")
+
+  results[[f]] <- left_join(votes_long, seats_long,
+                            by = c("province", "abbreviation")) |>
+    mutate(
+      votes = as.numeric(votes),
+      seats = as.numeric(seats),
+      base_election = if_else(str_detect(f, "201606"),
+                              "general_2016_06", "general_2019_04")
+    ) |>
+    filter(!is.na(province), province != "", !is.na(votes), votes > 0) |>
+      filter(!is.na(province), province != "", province != "Total",
+           !is.na(votes), votes > 0)
+}
+
+results <- bind_rows(results)
+
+stopifnot(n_distinct(results$province) == 52)
+
+# --- 2. magnitud de cada circunscripcion ---------------------------------
+magnitude <- results |>
+  filter(base_election == "general_2019_04") |>
+  group_by(province) |>
+  summarise(magnitude = sum(seats, na.rm = TRUE), .groups = "drop")
+
+stopifnot(sum(magnitude$magnitude) == 350)
+
+# --- 3. escenarios de voto nacional de VOX -------------------------------
+scenarios <- bind_rows(
+  tibble(moment = "march_2019",   base_election = "general_2016_06",
+         vox_nat = c(0.08, 0.10, 0.12, 0.14)),
+  tibble(moment = "october_2019", base_election = "general_2019_04",
+         vox_nat = c(0.08, 0.10, 0.12, 0.14))
+)
+
+# --- 4. proyeccion: swing uniforme, renormalizando el resto --------------
+others <- results |>
+  filter(abbreviation != "VOX") |>
+  group_by(base_election, province) |>
+  mutate(share_others = votes / sum(votes)) |>
+  ungroup() |>
+  select(base_election, province, abbreviation, share_others)
+
+expected <- bind_rows(
+  left_join(others, scenarios, by = "base_election",
+            relationship = "many-to-many") |>
+    mutate(share_exp = share_others * (1 - vox_nat)),
+  left_join(distinct(others, base_election, province), scenarios,
+            by = "base_election", relationship = "many-to-many") |>
+    mutate(abbreviation = "VOX", share_exp = vox_nat)
+) |>
+  left_join(magnitude, by = "province")
+
+stopifnot(!any(is.na(expected$magnitude)))
+
+# --- 5. D'Hondt -----------------------------------------------------------
+seats_exp <- expected |>
+  filter(share_exp >= 0.03) |>
+  mutate(divisor = map(magnitude, seq_len)) |>
+  unnest(divisor) |>
+  mutate(quotient = share_exp / divisor) |>
+  group_by(moment, vox_nat, province) |>
+  arrange(desc(quotient), .by_group = TRUE) |>
+  filter(row_number() <= magnitude) |>
+  count(moment, vox_nat, province, abbreviation, name = "seats") |>
+  ungroup()
+
+vox_expected <- seats_exp |>
+  filter(abbreviation == "VOX") |>
+  select(-abbreviation) |>
+  pivot_wider(names_from = vox_nat, values_from = seats, values_fill = 0) |>
+  arrange(moment, province)
+
+vox_expected |> 
+  arrange(province)
+```
+
+```{r}
+results |>
+  filter(base_election == "general_2019_04") |>
+  distinct(province) |>
+  anti_join(filter(results, base_election == "general_2016_06") |> distinct(province),
+            by = "province")
+```
+
+```{r}
+# --- expectativa media de escaños por provincia y momento -----------------
+expectation <- seats_exp |>
+  filter(abbreviation == "VOX") |>
+  group_by(moment, province) |>
+  summarise(exp_seats = mean(seats), .groups = "drop") |>
+  bind_rows(                                   # provincias con 0 en todos los escenarios
+    crossing(moment = c("march_2019", "october_2019"),
+             province = magnitude$province) |>
+      anti_join(filter(seats_exp, abbreviation == "VOX"),
+                by = c("moment", "province")) |>
+      mutate(exp_seats = 0)
+  ) |>
+  pivot_wider(names_from = moment, values_from = exp_seats,
+              names_prefix = "exp_") |>
+  mutate(exp_gain = exp_october_2019 - exp_march_2019)
+
+# --- listas de abril y noviembre, solo Congreso y titulares ---------------
+lists_2019 <- vox_candidates |>
+  filter(chamber == "Congress", is_titular,
+         election %in% c("general_2019_04", "general_2019_11")) |>
+  mutate(province = str_replace(province, "^Araba.*", "Araba"))
+
+# --- rotación por provincia ----------------------------------------------
+churn <- lists_2019 |>
+  group_by(province, person_id) |>
+  summarise(in_april = any(election == "general_2019_04"),
+            in_nov   = any(election == "general_2019_11"),
+            .groups  = "drop_last") |>
+  summarise(
+    n_april   = sum(in_april),
+    n_nov     = sum(in_nov),
+    stayed    = sum(in_april & in_nov),
+    dropped   = sum(in_april & !in_nov),
+    added     = sum(!in_april & in_nov),
+    churn_rate = dropped / n_april,
+    .groups   = "drop"
+  ) |>
+  left_join(expectation, by = "province")
+
+churn |> arrange(desc(exp_october_2019))
+
+# --- total de nombres que cambiaron --------------------------------------
+churn |> summarise(across(c(n_april, stayed, dropped, added), sum))
+
+# --- rotación solo en los puestos
+```
+
+```{r}
+# lo que sabían en octubre: el resultado REAL de abril, no una proyección
+seats_april <- vox_candidates |>
+  filter(election == "general_2019_04", chamber == "Congress",
+         is_titular, is_elected) |>
+  mutate(province = str_replace(province, "^Araba.*", "Araba")) |>
+  count(province, name = "seats_april")
+
+bands <- expectation |>
+  left_join(seats_april, by = "province") |>
+  mutate(seats_april = replace_na(seats_april, 0))
+
+# ¿quién es nuevo en la lista de noviembre?
+november <- vox_candidates |>
+  filter(election == "general_2019_11", chamber == "Congress", is_titular) |>
+  mutate(province = str_replace(province, "^Araba.*", "Araba"))
+
+april_ids <- vox_candidates |>
+  filter(election == "general_2019_04", chamber == "Congress", is_titular) |>
+  mutate(province = str_replace(province, "^Araba.*", "Araba")) |>
+  distinct(province, person_id)
+
+test <- november |>
+  left_join(bands, by = "province") |>
+  left_join(mutate(april_ids, was_in_april = TRUE),
+            by = c("province", "person_id")) |>
+  mutate(
+    is_new = is.na(was_in_april),
+    band = case_when(
+      list_position <= seats_april       ~ "1_ya ganable en abril",
+      list_position <= exp_october_2019  ~ "2_nuevo ganable",
+      TRUE                               ~ "3_no ganable"
+    )
+  )
+
+test |>
+  group_by(band) |>
+  summarise(n = n(), share_new = mean(is_new))
+
+# solo en provincias donde la expectativa creció
+test |>
+  filter(exp_october_2019 > seats_april) |>
+  group_by(band) |>
+  summarise(n = n(), share_new = mean(is_new))
+
+# posición exacta donde entran los nuevos, respecto al corte de abril
+test |>
+  mutate(dist_cutoff = list_position - seats_april) |>
+  filter(dist_cutoff >= -3, dist_cutoff <= 6) |>
+  group_by(dist_cutoff) |>
+  summarise(n = n(), share_new = mean(is_new))
+```
+
+```{r}
+test |>
+  filter(!is_new, exp_october_2019 > seats_april) |>
+  left_join(
+    vox_candidates |>
+      filter(election == "general_2019_04", chamber == "Congress", is_titular) |>
+      mutate(province = str_replace(province, "^Araba.*", "Araba")) |>
+      select(province, person_id, pos_april = list_position),
+    by = c("province", "person_id")
+  ) |>
+  mutate(move = pos_april - list_position) |>
+  group_by(band) |>
+  summarise(n = n(), mean_move = mean(move, na.rm = TRUE),
+            promoted = mean(move > 0, na.rm = TRUE))
+```
+
+```{r}
+test |>
+  group_by(province) |>
+  summarise(identica = all(!is_new), n = n()) |>
+  count(identica)
+```
+
+```{r}
+test |>
+  group_by(province) |>
+  summarise(first_new = min(list_position[is_new]),
+            seats_april = first(seats_april),
+            .groups = "drop") |>
+  count(first_new > seats_april)
+```
+
+```{r}
+test |>
+  group_by(province) |>
+  summarise(first_new = min(list_position[is_new]),
+            seats_april = first(seats_april), .groups = "drop") |>
+  filter(is.na(first_new) | is.na(seats_april) | first_new <= seats_april) |>
+  left_join(select(test, province, list_position, candidate, is_new),
+            by = "province") |>
+  filter(is_new) |>
+  arrange(province, list_position) |> 
+  view()
+  
+```
+
+```{r}
+
+```

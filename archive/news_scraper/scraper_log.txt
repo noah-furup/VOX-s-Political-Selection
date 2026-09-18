@@ -1,0 +1,12 @@
+[14:18:02] Fase 1: recolectando URLs... 
+[14:18:34] index 1: sin contenido, salto 
+[14:19:07] index 2: sin contenido, salto 
+[14:19:42] index 3: sin contenido, salto 
+[14:20:15] index 4: sin contenido, salto 
+[14:20:48] index 5: sin contenido, salto 
+[14:21:21] index 6: sin contenido, salto 
+[14:31:01] Fase 1: recolectando URLs... 
+[14:32:05] Fase 1: recolectando URLs... 
+[14:32:36] index 1: sin contenido, salto 
+[14:33:09] index 2: sin contenido, salto 
+[14:33:44] index 3: sin contenido, salto 

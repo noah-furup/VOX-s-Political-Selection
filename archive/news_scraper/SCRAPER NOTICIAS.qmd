@@ -1,0 +1,970 @@
+---
+title: "SCRAPER"
+format: html
+editor: visual
+---
+
+```{r}
+# =============================================================================
+# Scraper de noticias para construir un corpus (TFM) — versión R
+#
+# Diseñado para corpus grandes:
+#   - dos fases: (1) recolectar URLs, (2) extraer cada noticia
+#   - REANUDABLE: si se corta, retoma donde iba (no re-descarga lo hecho)
+#   - guarda INCREMENTALMENTE en disco (no pierdes trabajo)
+#   - respetuoso con el servidor (pausas + User-Agent honesto)
+#
+# Requisitos:
+#   install.packages(c("rvest", "xml2", "httr", "readr", "dplyr", "purrr"))
+#
+# AJUSTA los selectores marcados con  # <-- AJUSTAR
+# tras inspeccionar el HTML real en el navegador.
+# =============================================================================
+
+library(rvest)
+library(xml2)
+library(httr)
+library(readr)
+library(dplyr)
+library(purrr)
+
+# ---------------------------------------------------------------------------
+# Configuración
+# ---------------------------------------------------------------------------
+BASE        <- "https://www.voxespana.es"
+INDEX_TMPL  <- paste0(BASE, "/noticias/page/%d")   # patrón páginas de índice
+PAGE_START  <- 1
+PAGE_END    <- 1398                                 # ajusta al rango real
+UA          <- "Mozilla/5.0 (TFM investigacion academica; contacto: tu-email)"
+DELAY_MIN   <- 2.0                                  # pausa mínima (segundos)
+DELAY_MAX   <- 4.0                                  # pausa máxima
+URLS_FILE   <- "urls.txt"                           # lista de URLs recolectadas
+CORPUS_FILE <- "corpus.csv"                         # salida incremental
+LOG_FILE    <- "scraper_log.txt"
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+pausa <- function() Sys.sleep(runif(1, DELAY_MIN, DELAY_MAX))
+
+log_msg <- function(...) {
+  msg <- paste0("[", format(Sys.time(), "%H:%M:%S"), "] ", ...)
+  cat(msg, "\n")
+  cat(msg, "\n", file = LOG_FILE, append = TRUE)
+}
+
+# Descarga con reintentos suaves. Devuelve el HTML parseado o NULL.
+get_html <- function(url) {
+  for (intento in 1:3) {
+    resp <- tryCatch(
+      GET(url, user_agent(UA), timeout(20)),
+      error = function(e) NULL
+    )
+    if (!is.null(resp)) {
+      code <- status_code(resp)
+      if (code == 200) {
+        return(read_html(content(resp, as = "text", encoding = "UTF-8")))
+      }
+      if (code == 404) return(NULL)
+    }
+    Sys.sleep(5 * intento)
+  }
+  NULL
+}
+
+# ---------------------------------------------------------------------------
+# Fase 1: recolectar URLs de noticias desde las páginas de índice
+# ---------------------------------------------------------------------------
+recolectar_urls <- function() {
+  # reanudar: si ya existe el fichero, empezamos desde donde quedó
+  if (file.exists(URLS_FILE)) {
+    log_msg("urls.txt ya existe; se reutiliza. Bórralo para empezar de cero.")
+    return(readLines(URLS_FILE, warn = FALSE))
+  }
+
+  urls <- character(0)
+  for (n in PAGE_START:PAGE_END) {
+    page_url <- sprintf(INDEX_TMPL, n)
+    doc <- get_html(page_url)
+    if (is.null(doc)) {
+      log_msg("index ", n, ": sin contenido, salto")
+      pausa(); next
+    }
+
+    # <-- AJUSTAR: cómo se enlaza cada noticia en la página de índice.
+    # Típico en WordPress: <h2 class="entry-title"><a href=...>
+    nuevas <- doc %>%
+      html_elements("h2.entry-title a") %>%
+      html_attr("href") %>%
+      url_absolute(BASE)
+
+    urls <- unique(c(urls, nuevas))
+    log_msg("index ", n, ": acumuladas ", length(urls), " URLs")
+    pausa()
+  }
+
+  writeLines(urls, URLS_FILE)
+  urls
+}
+
+# ---------------------------------------------------------------------------
+# Fase 2: extraer contenido de una noticia
+# ---------------------------------------------------------------------------
+extraer_noticia <- function(url) {
+  doc <- get_html(url)
+  if (is.null(doc)) return(NULL)
+
+  # <-- AJUSTAR: título
+  titulo <- doc %>% html_element("h1") %>% html_text2()
+  if (is.na(titulo)) titulo <- ""
+
+  # <-- AJUSTAR: fecha (a menudo en <time datetime="...">)
+  fecha <- doc %>% html_element("time") %>% html_attr("datetime")
+  if (is.na(fecha)) fecha <- ""
+
+  # <-- AJUSTAR: cuerpo del artículo
+  cuerpo_el <- doc %>% html_element("div.entry-content")
+  if (!is.na(cuerpo_el) && length(cuerpo_el) > 0) {
+    # eliminar scripts/estilos residuales
+    xml_remove(html_elements(cuerpo_el, "script, style"))
+    cuerpo <- html_text2(cuerpo_el)
+  } else {
+    cuerpo <- ""
+  }
+
+  tibble(url = url, titulo = titulo, fecha = fecha, cuerpo = cuerpo)
+}
+
+# ---------------------------------------------------------------------------
+# Orquestación con reanudación y guardado incremental
+# ---------------------------------------------------------------------------
+main <- function() {
+  log_msg("Fase 1: recolectando URLs...")
+  urls <- recolectar_urls()
+  log_msg("Total URLs: ", length(urls))
+
+  # reanudar fase 2: qué URLs ya están en el corpus
+  ya_hechas <- character(0)
+  if (file.exists(CORPUS_FILE)) {
+    hecho <- tryCatch(read_csv(CORPUS_FILE, show_col_types = FALSE),
+                      error = function(e) NULL)
+    if (!is.null(hecho) && "url" %in% names(hecho)) {
+      ya_hechas <- hecho$url
+      log_msg("Reanudando: ", length(ya_hechas), " noticias ya guardadas.")
+    }
+  } else {
+    # crear cabecera del CSV una sola vez
+    write_csv(
+      tibble(url = character(), titulo = character(),
+             fecha = character(), cuerpo = character()),
+      CORPUS_FILE
+    )
+  }
+
+  pendientes <- setdiff(urls, ya_hechas)
+  log_msg("Fase 2: quedan ", length(pendientes), " noticias por descargar.")
+
+  i <- 0
+  for (url in pendientes) {
+    i <- i + 1
+    datos <- extraer_noticia(url)
+    if (!is.null(datos)) {
+      # append: escribe cada noticia en cuanto se descarga
+      write_csv(datos, CORPUS_FILE, append = TRUE)
+    }
+    if (i %% 25 == 0) log_msg("  ", i, "/", length(pendientes), " procesadas")
+    pausa()
+  }
+
+  log_msg("Listo. Corpus en ", CORPUS_FILE)
+}
+
+main()
+```
+
+
+```{r}
+# =============================================================================
+# Diagnóstico: por qué el scraper devuelve "sin contenido"
+# Ejecuta esto en R y mira lo que imprime.
+# =============================================================================
+
+library(httr)
+library(rvest)
+
+UA  <- "Mozilla/5.0 (TFM investigacion academica; contacto: tu-email)"
+url <- "https://www.voxespana.es/noticias/page/1"
+
+cat("=== 1. Petición cruda ===\n")
+resp <- GET(url, user_agent(UA), timeout(20))
+
+cat("Código de estado :", status_code(resp), "\n")
+cat("URL final        :", resp$url, "\n")   # revela redirecciones
+cat("Content-Type     :", headers(resp)[["content-type"]], "\n")
+cat("Tamaño (bytes)   :", length(content(resp, as = "raw")), "\n\n")
+
+# Guarda el HTML tal cual para inspeccionarlo
+html_txt <- content(resp, as = "text", encoding = "UTF-8")
+writeLines(html_txt, "debug_page1.html")
+cat("HTML guardado en debug_page1.html (ábrelo en el navegador)\n\n")
+
+cat("=== 2. ¿Qué selectores hay realmente? ===\n")
+doc <- read_html(html_txt)
+
+# Título de la página (para ver si es la página correcta o una de error)
+cat("<title>:", doc %>% html_element("title") %>% html_text2(), "\n\n")
+
+# Probamos varios selectores candidatos para los enlaces de noticias
+candidatos <- c(
+  "h2.entry-title a",
+  "article a",
+  "h2 a",
+  "h3 a",
+  ".post-title a",
+  ".elementor-post__title a",
+  "a[rel='bookmark']"
+)
+
+for (sel in candidatos) {
+  n <- doc %>% html_elements(sel) %>% length()
+  cat(sprintf("  %-35s -> %d elementos\n", sel, n))
+}
+
+cat("\n=== 3. Primeros enlaces de la página (pista de la estructura) ===\n")
+enlaces <- doc %>% html_elements("a") %>% html_attr("href")
+enlaces <- enlaces[!is.na(enlaces)]
+print(head(unique(enlaces), 30))
+```
+
+```{r}
+# =============================================================================
+# Construcción del corpus vía WordPress REST API — versión R
+#
+# Mucho más limpio que scrapear HTML:
+#   - datos estructurados en JSON (título, fecha, contenido, etc.)
+#   - pagina automáticamente usando la cabecera X-WP-TotalPages
+#   - REANUDABLE y con guardado INCREMENTAL
+#   - sin muro de Cloudflare
+#
+# Requisitos:
+#   install.packages(c("httr", "jsonlite", "rvest", "readr", "dplyr", "purrr"))
+# =============================================================================
+
+library(httr)
+library(jsonlite)
+library(rvest)      # para limpiar el HTML del contenido a texto
+library(readr)
+library(dplyr)
+library(purrr)
+
+
+
+# operador auxiliar: valor por defecto si NULL
+`%||%` <- function(a, b) if (is.null(a)) b else a
+# ---------------------------------------------------------------------------
+# Configuración
+# ---------------------------------------------------------------------------
+API         <- "https://www.voxespana.es/wp-json/wp/v2/posts"
+PER_PAGE    <- 100                       # máximo que permite WordPress
+UA          <- "Mozilla/5.0 (TFM investigacion academica; contacto: tu-email)"
+DELAY_MIN   <- 1.0
+DELAY_MAX   <- 2.5
+CORPUS_FILE <- "corpus.csv"
+LOG_FILE    <- "corpus_log.txt"
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+pausa <- function() Sys.sleep(runif(1, DELAY_MIN, DELAY_MAX))
+
+log_msg <- function(...) {
+  msg <- paste0("[", format(Sys.time(), "%H:%M:%S"), "] ", ...)
+  cat(msg, "\n")
+  cat(msg, "\n", file = LOG_FILE, append = TRUE)
+}
+
+# Convierte HTML (content.rendered) a texto plano y limpio
+html_a_texto <- function(html) {
+  if (is.null(html) || is.na(html) || html == "") return("")
+  txt <- tryCatch(
+    read_html(html) %>% html_text2(),
+    error = function(e) ""
+  )
+  # colapsar espacios/saltos múltiples
+  txt <- gsub("[[:space:]]+", " ", txt)
+  trimws(txt)
+}
+
+# Descarga una página de la API. Devuelve list(datos=tibble, total_paginas=int)
+get_pagina <- function(page) {
+  url <- paste0(API, "?per_page=", PER_PAGE, "&page=", page)
+  for (intento in 1:3) {
+    resp <- tryCatch(GET(url, user_agent(UA), timeout(30)),
+                     error = function(e) NULL)
+    if (!is.null(resp) && status_code(resp) == 200) {
+      total_paginas <- as.integer(headers(resp)[["x-wp-totalpages"]])
+      cruda <- content(resp, as = "text", encoding = "UTF-8")
+      posts <- fromJSON(cruda, simplifyDataFrame = FALSE)
+
+      datos <- map_dfr(posts, function(p) {
+        tibble(
+          id       = p$id %||% NA_integer_,
+          fecha    = p$date %||% "",
+          url      = p$link %||% "",
+          titulo   = html_a_texto(p$title$rendered %||% ""),
+          # categorías/etiquetas como IDs, separados por ";"
+          categorias = paste(unlist(p$categories), collapse = ";"),
+          etiquetas  = paste(unlist(p$tags), collapse = ";"),
+          cuerpo   = html_a_texto(p$content$rendered %||% "")
+        )
+      })
+      return(list(datos = datos, total_paginas = total_paginas))
+    }
+    Sys.sleep(5 * intento)
+  }
+  NULL
+}
+
+
+# ---------------------------------------------------------------------------
+# Orquestación: reanudable + incremental
+# ---------------------------------------------------------------------------
+main <- function() {
+  # ¿qué páginas ya tenemos? Reanudamos por nº de página completadas.
+  pagina_inicio <- 1
+  ids_existentes <- integer(0)
+  if (file.exists(CORPUS_FILE)) {
+    hecho <- tryCatch(read_csv(CORPUS_FILE, show_col_types = FALSE),
+                      error = function(e) NULL)
+    if (!is.null(hecho) && nrow(hecho) > 0) {
+      ids_existentes <- hecho$id
+      # estimamos por dónde seguir (cada página son PER_PAGE posts)
+      pagina_inicio <- floor(nrow(hecho) / PER_PAGE) + 1
+      log_msg("Reanudando: ", nrow(hecho), " posts ya guardados. ",
+              "Continuo en página ", pagina_inicio, ".")
+    }
+  } else {
+    write_csv(
+      tibble(id = integer(), fecha = character(), url = character(),
+             titulo = character(), categorias = character(),
+             etiquetas = character(), cuerpo = character()),
+      CORPUS_FILE
+    )
+  }
+
+  # primera llamada para conocer el total de páginas
+  primera <- get_pagina(pagina_inicio)
+  if (is.null(primera)) { log_msg("No se pudo leer la API. Aborto."); return() }
+  total_paginas <- primera$total_paginas
+  log_msg("Total de páginas en la API: ", total_paginas)
+
+  page <- pagina_inicio
+  repeat {
+    res <- if (page == pagina_inicio) primera else get_pagina(page)
+    if (is.null(res)) { log_msg("Página ", page, ": fallo, salto"); page <- page + 1 }
+    else {
+      # evitar duplicar posts ya guardados (por si la reanudación se solapa)
+      nuevos <- res$datos %>% filter(!(id %in% ids_existentes))
+      if (nrow(nuevos) > 0) {
+        write_csv(nuevos, CORPUS_FILE, append = TRUE)
+        ids_existentes <- c(ids_existentes, nuevos$id)
+      }
+      log_msg("Página ", page, "/", total_paginas,
+              ": +", nrow(nuevos), " posts (acum. ", length(ids_existentes), ")")
+    }
+    if (page >= total_paginas) break
+    page <- page + 1
+    pausa()
+  }
+
+  log_msg("Listo. Corpus completo en ", CORPUS_FILE,
+          " (", length(ids_existentes), " noticias).")
+}
+
+main()
+```
+
+
+```{r}
+# =============================================================================
+# Diagnóstico: por qué la API devuelve NULL desde R
+# =============================================================================
+
+library(httr)
+library(jsonlite)
+
+UA  <- "Mozilla/5.0 (TFM investigacion academica; contacto: tu-email)"
+url <- "https://www.voxespana.es/wp-json/wp/v2/posts?per_page=100&page=1"
+
+cat("=== Llamada directa ===\n")
+resp <- GET(url, user_agent(UA), timeout(30))
+
+cat("Código   :", status_code(resp), "\n")
+cat("Tipo     :", headers(resp)[["content-type"]], "\n")
+cat("TotalPag :", headers(resp)[["x-wp-totalpages"]], "\n")
+cat("TotalPosts:", headers(resp)[["x-wp-total"]], "\n")
+
+txt <- content(resp, as = "text", encoding = "UTF-8")
+cat("Tamaño   :", nchar(txt), "caracteres\n")
+cat("Primeros 300 caracteres de la respuesta:\n")
+cat(substr(txt, 1, 300), "\n\n")
+
+# ¿es Cloudflare otra vez?
+if (grepl("Just a moment|Cloudflare|cf-", txt, ignore.case = TRUE)) {
+  cat(">>> Cloudflare está bloqueando la petición desde R.\n")
+} else {
+  cat("=== ¿Parsea el JSON? ===\n")
+  parsed <- tryCatch(fromJSON(txt, simplifyDataFrame = FALSE),
+                     error = function(e) {cat("Error de parseo:", conditionMessage(e), "\n"); NULL})
+  if (!is.null(parsed)) {
+    cat("Posts en esta página:", length(parsed), "\n")
+    if (length(parsed) > 0) {
+      cat("Campos del primer post:\n")
+      print(names(parsed[[1]]))
+    }
+  }
+}
+```
+
+```{r}
+# =============================================================================
+# Reintentar la API imitando las cabeceras de un navegador real
+# =============================================================================
+
+library(httr)
+library(jsonlite)
+
+url <- "https://www.voxespana.es/wp-json/wp/v2/posts?per_page=100&page=1"
+
+resp <- GET(
+  url,
+  add_headers(
+    `User-Agent`      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    `Accept`          = "application/json, text/plain, */*",
+    `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8",
+    `Referer`         = "https://www.voxespana.es/noticias",
+    `Connection`      = "keep-alive"
+  ),
+  timeout(30)
+)
+
+cat("Código   :", status_code(resp), "\n")
+txt <- content(resp, as = "text", encoding = "UTF-8")
+
+if (grepl("Just a moment|Cloudflare", txt, ignore.case = TRUE)) {
+  cat(">>> Sigue bloqueando. Harán falta cookies/navegador real.\n")
+} else {
+  cat("TotalPag  :", headers(resp)[["x-wp-totalpages"]], "\n")
+  cat("TotalPosts:", headers(resp)[["x-wp-total"]], "\n")
+  cat(">>> FUNCIONA con cabeceras de navegador.\n")
+  parsed <- fromJSON(txt, simplifyDataFrame = FALSE)
+  cat("Posts en la página:", length(parsed), "\n")
+}
+```
+
+
+```{r}
+# =============================================================================
+# Construcción del corpus vía Wayback Machine (Internet Archive) — versión R
+#
+# Fuente limpia y pública: la CDX API del Internet Archive. Las copias se
+# sirven desde web.archive.org, sin el Cloudflare del sitio original.
+#
+#   Fase 1: listar todas las capturas de voxespana.es/noticias/* (CDX API)
+#   Fase 2: descargar cada captura (versión "id_" = HTML original) y extraer texto
+#   REANUDABLE + guardado INCREMENTAL
+#
+# Requisitos:
+#   install.packages(c("httr", "rvest", "readr", "dplyr"))
+# =============================================================================
+
+library(httr)
+library(rvest)
+library(readr)
+library(dplyr)
+
+# ---------------------------------------------------------------------------
+# Configuración
+# ---------------------------------------------------------------------------
+PREFIJO     <- "voxespana.es/noticias/*"   # qué URLs archivadas buscar
+UA          <- "Mozilla/5.0 (TFM investigacion academica; contacto: tu-email)"
+DELAY_MIN   <- 1.0
+DELAY_MAX   <- 2.5
+CDX_FILE    <- "capturas_cdx.csv"          # lista de capturas (fase 1)
+CORPUS_FILE <- "corpus.csv"                # salida final (fase 2)
+LOG_FILE    <- "corpus_log.txt"
+
+pausa <- function() Sys.sleep(runif(1, DELAY_MIN, DELAY_MAX))
+
+log_msg <- function(...) {
+  msg <- paste0("[", format(Sys.time(), "%H:%M:%S"), "] ", ...)
+  cat(msg, "\n"); cat(msg, "\n", file = LOG_FILE, append = TRUE)
+}
+
+# ---------------------------------------------------------------------------
+# Fase 1: listar capturas con la CDX API
+# ---------------------------------------------------------------------------
+# Parámetros:
+#   collapse=urlkey  -> una sola captura por URL (evita duplicados por fecha)
+#   filter=statuscode:200 -> solo capturas correctas
+#   output=json
+listar_capturas <- function() {
+  if (file.exists(CDX_FILE)) {
+    log_msg("capturas_cdx.csv ya existe; se reutiliza. Bórralo para rehacer.")
+    return(read_csv(CDX_FILE, show_col_types = FALSE))
+  }
+
+  url <- paste0(
+    "http://web.archive.org/cdx/search/cdx",
+    "?url=", URLencode(PREFIJO, reserved = TRUE),
+    "&output=json",
+    "&fl=timestamp,original,statuscode,mimetype",
+    "&filter=statuscode:200",
+    "&filter=mimetype:text/html",
+    "&collapse=urlkey"
+  )
+
+  log_msg("Consultando CDX API (puede tardar)...")
+  resp <- GET(url, user_agent(UA), timeout(120))
+  if (status_code(resp) != 200) {
+    log_msg("CDX API devolvió ", status_code(resp), ". Aborto."); return(NULL)
+  }
+
+  # la respuesta JSON es una matriz; la primera fila son los nombres de columna
+  filas <- content(resp, as = "parsed", simplifyVector = TRUE)
+  if (length(filas) <= 1) { log_msg("Sin capturas."); return(NULL) }
+
+  cabecera <- filas[1, ]
+  datos <- as.data.frame(filas[-1, , drop = FALSE], stringsAsFactors = FALSE)
+  names(datos) <- cabecera
+
+  write_csv(datos, CDX_FILE)
+  log_msg("Capturas encontradas: ", nrow(datos))
+  datos
+}
+
+# ---------------------------------------------------------------------------
+# Fase 2: descargar una captura y extraer el texto
+# ---------------------------------------------------------------------------
+# El sufijo "id_" tras el timestamp devuelve el HTML original capturado,
+# sin la barra de herramientas de Wayback.
+extraer_captura <- function(timestamp, original) {
+  wb_url <- paste0("http://web.archive.org/web/", timestamp, "id_/", original)
+
+  resp <- tryCatch(GET(wb_url, user_agent(UA), timeout(30)),
+                   error = function(e) NULL)
+  if (is.null(resp) || status_code(resp) != 200) return(NULL)
+
+  html <- tryCatch(read_html(content(resp, as = "text", encoding = "UTF-8")),
+                   error = function(e) NULL)
+  if (is.null(html)) return(NULL)
+
+  saca <- function(sel, attr = NULL) {
+    el <- html_element(html, sel)
+    if (length(el) == 0 || is.na(el)) return("")
+    if (is.null(attr)) html_text2(el) else html_attr(el, attr)
+  }
+
+  # <-- AJUSTAR si hiciera falta: en el HTML archivado de Vox
+  titulo <- saca("h1")
+  fecha  <- saca("time", "datetime")
+  cuerpo_el <- html_element(html, "div.entry-content")
+  if (length(cuerpo_el) > 0 && !is.na(cuerpo_el)) {
+    xml2::xml_remove(html_elements(cuerpo_el, "script, style"))
+    cuerpo <- html_text2(cuerpo_el)
+  } else cuerpo <- ""
+
+  data.frame(
+    timestamp = timestamp,
+    url       = original,
+    fecha     = fecha,
+    titulo    = titulo,
+    cuerpo    = gsub("[[:space:]]+", " ", trimws(cuerpo)),
+    stringsAsFactors = FALSE
+  )
+}
+
+# ---------------------------------------------------------------------------
+# Orquestación
+# ---------------------------------------------------------------------------
+main <- function() {
+  caps <- listar_capturas()
+  if (is.null(caps) || nrow(caps) == 0) return()
+
+  ya_hechas <- character(0)
+  if (file.exists(CORPUS_FILE)) {
+    hecho <- tryCatch(read_csv(CORPUS_FILE, show_col_types = FALSE),
+                      error = function(e) NULL)
+    if (!is.null(hecho) && "url" %in% names(hecho)) {
+      ya_hechas <- hecho$url
+      log_msg("Reanudando: ", length(ya_hechas), " noticias ya guardadas.")
+    }
+  } else {
+    write_csv(
+      data.frame(timestamp = character(), url = character(), fecha = character(),
+                 titulo = character(), cuerpo = character()),
+      CORPUS_FILE
+    )
+  }
+
+  pendientes <- caps %>% filter(!(original %in% ya_hechas))
+  log_msg("Fase 2: ", nrow(pendientes), " capturas por descargar.")
+
+  for (i in seq_len(nrow(pendientes))) {
+    fila <- pendientes[i, ]
+    datos <- extraer_captura(fila$timestamp, fila$original)
+    if (!is.null(datos)) write_csv(datos, CORPUS_FILE, append = TRUE)
+    if (i %% 25 == 0) log_msg("  ", i, "/", nrow(pendientes), " procesadas")
+    pausa()
+  }
+
+  log_msg("Listo. Corpus en ", CORPUS_FILE)
+}
+
+main()
+```
+
+
+```{r}
+# =============================================================================
+# Construcción del corpus vía Wayback Machine (Internet Archive) — versión R
+# TFM — Ciencias Sociales Computacionales
+#
+#   Fase 0: (opcional) inspeccionar el HTML de una captura para fijar selectores
+#   Fase 1: listar capturas de voxespana.es/noticias/* por VENTANA (CDX API)
+#   Fase 2: descargar cada captura ("id_" = HTML original) y extraer texto
+#
+# Mejoras respecto a la versión inicial:
+#   1. Troceado por ventanas electorales (from/to) -> de ~25h a ~2-4h
+#   2. CDX con reintentos y timeout amplio
+#   3. Logging de códigos HTTP + pausa ante 429 (rate limiting)
+#   4. Selectores configurables + función de inspección para verificarlos
+#   5. Reanudable e incremental por ventana
+#
+# Requisitos:
+#   install.packages(c("httr", "rvest", "xml2", "readr", "dplyr", "tibble", "purrr"))
+# =============================================================================
+
+library(httr)
+library(rvest)
+library(xml2)
+library(readr)
+library(dplyr)
+library(tibble)
+library(purrr)
+
+# ---------------------------------------------------------------------------
+# Configuración
+# ---------------------------------------------------------------------------
+PREFIJO   <- "voxespana.es/noticias/*"
+UA        <- "Mozilla/5.0 (compatible; investigacion academica TFM; tu-email@ejemplo.com)"
+DELAY_MIN <- 1.0
+DELAY_MAX <- 2.5
+OUT_DIR   <- "corpus_wayback"
+LOG_FILE  <- "corpus_wayback_log.txt"
+
+# --- Ventanas electorales ----------------------------------------------------
+# from/to en formato YYYYMMDD. 'to' NUNCA debe pasar del día de la votación:
+# incluir días posteriores introduce causalidad inversa (los electos generan
+# noticias por su cargo, no por decisión estratégica previa del partido).
+VENTANAS <- tribble(
+  ~nombre,            ~from,       ~to,
+  "generales_2019A",  "20190320",  "20190428",
+  "generales_2019N",  "20191015",  "20191110",
+  "generales_2023",   "20230619",  "20230723"
+  # Añade autonómicas, p. ej.:
+  # "autonomicas_2023", "20230424", "20230528"
+)
+
+# --- Selectores CSS ----------------------------------------------------------
+# VERIFÍCALOS con inspeccionar_captura() antes de lanzar la descarga completa.
+# El tema del sitio puede haber cambiado entre 2019 y 2023: comprueba uno por
+# ventana y, si difieren, usa SELECTORES_POR_VENTANA más abajo.
+SEL_TITULO <- "h1"
+SEL_FECHA  <- "time"                    # se lee el atributo datetime
+SEL_CUERPO <- "div.entry-content"
+
+# Si alguna ventana necesita selectores distintos, decláralo aquí.
+# El nombre debe coincidir con VENTANAS$nombre. Si no aparece, se usan los de arriba.
+SELECTORES_POR_VENTANA <- list(
+  # "generales_2019A" = list(titulo = "h1.entry-title",
+  #                          fecha  = "time.entry-date",
+  #                          cuerpo = "div.post-content")
+)
+
+if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, recursive = TRUE)
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+pausa <- function() Sys.sleep(runif(1, DELAY_MIN, DELAY_MAX))
+
+log_msg <- function(...) {
+  msg <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", ...)
+  cat(msg, "\n")
+  cat(msg, "\n", file = LOG_FILE, append = TRUE)
+}
+
+limpiar <- function(x) trimws(gsub("[[:space:]]+", " ", x))
+
+selectores_de <- function(nombre_ventana) {
+  s <- SELECTORES_POR_VENTANA[[nombre_ventana]]
+  list(
+    titulo = s$titulo %||% SEL_TITULO,
+    fecha  = s$fecha  %||% SEL_FECHA,
+    cuerpo = s$cuerpo %||% SEL_CUERPO
+  )
+}
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# ---------------------------------------------------------------------------
+# FASE 0 — Inspección: úsala ANTES de lanzar la descarga masiva
+# ---------------------------------------------------------------------------
+# Descarga UNA captura y te muestra qué devuelven los selectores actuales,
+# más la lista de clases de <div> disponibles por si hay que ajustarlos.
+inspeccionar_captura <- function(timestamp, url_original,
+                                 sel = list(titulo = SEL_TITULO,
+                                            fecha  = SEL_FECHA,
+                                            cuerpo = SEL_CUERPO)) {
+  wb <- paste0("http://web.archive.org/web/", timestamp, "id_/", url_original)
+  cat("URL:", wb, "\n\n")
+
+  resp <- GET(wb, user_agent(UA), timeout(60))
+  cat("HTTP:", status_code(resp), "\n")
+  if (status_code(resp) != 200) return(invisible(NULL))
+
+  h <- read_html(content(resp, as = "text", encoding = "UTF-8"))
+
+  probar <- function(etiqueta, selector, attr = NULL) {
+    el <- html_element(h, selector)
+    if (length(el) == 0 || all(is.na(el))) {
+      cat(etiqueta, " [", selector, "] -> NO ENCONTRADO\n", sep = "")
+    } else {
+      val <- if (is.null(attr)) html_text2(el) else html_attr(el, attr)
+      cat(etiqueta, " [", selector, "] -> ", substr(limpiar(val), 1, 200), "\n", sep = "")
+    }
+  }
+
+  probar("TITULO", sel$titulo)
+  probar("FECHA ", sel$fecha, "datetime")
+  probar("CUERPO", sel$cuerpo)
+
+  cat("\nClases de <div> presentes (para ajustar selectores):\n")
+  clases <- html_elements(h, "div[class]") |> html_attr("class") |> unique()
+  print(head(clases, 60))
+
+  invisible(h)
+}
+
+# Ejemplo de uso (descomenta y ajusta con una URL real salida de la fase 1):
+# inspeccionar_captura("20190415120000",
+#                      "https://www.voxespana.es/noticias/alguna-noticia-de-2019")
+
+# ---------------------------------------------------------------------------
+# FASE 1 — Listar capturas de una ventana (CDX API)
+# ---------------------------------------------------------------------------
+listar_capturas <- function(nombre, from, to, intentos = 3) {
+  fichero <- file.path(OUT_DIR, paste0("capturas_", nombre, ".csv"))
+
+  if (file.exists(fichero)) {
+    log_msg(nombre, ": capturas ya listadas, se reutilizan (borra el CSV para rehacer).")
+    return(read_csv(fichero, show_col_types = FALSE))
+  }
+
+  url <- paste0(
+    "http://web.archive.org/cdx/search/cdx",
+    "?url=", URLencode(PREFIJO, reserved = TRUE),
+    "&output=json",
+    "&fl=timestamp,original,statuscode,mimetype",
+    "&filter=statuscode:200",
+    "&filter=mimetype:text/html",
+    "&collapse=urlkey",
+    "&from=", from,
+    "&to=",   to
+  )
+
+  for (i in seq_len(intentos)) {
+    log_msg(nombre, ": consultando CDX (intento ", i, ")...")
+    resp <- tryCatch(GET(url, user_agent(UA), timeout(300)),
+                     error = function(e) { log_msg("  error: ", conditionMessage(e)); NULL })
+
+    if (!is.null(resp) && status_code(resp) == 200) {
+      filas <- content(resp, as = "parsed", simplifyVector = TRUE)
+      if (is.null(filas) || length(filas) <= 1) {
+        log_msg(nombre, ": sin capturas en esta ventana.")
+        return(NULL)
+      }
+      cabecera <- filas[1, ]
+      datos <- as.data.frame(filas[-1, , drop = FALSE], stringsAsFactors = FALSE)
+      names(datos) <- cabecera
+      datos <- as_tibble(datos)
+
+      write_csv(datos, fichero)
+      log_msg(nombre, ": ", nrow(datos), " capturas encontradas.")
+      return(datos)
+    }
+
+    if (!is.null(resp)) log_msg("  HTTP ", status_code(resp))
+    Sys.sleep(10 * i)
+  }
+
+  log_msg(nombre, ": la CDX no respondió tras ", intentos, " intentos.")
+  NULL
+}
+
+# ---------------------------------------------------------------------------
+# FASE 2 — Descargar una captura y extraer el texto
+# ---------------------------------------------------------------------------
+# El sufijo "id_" tras el timestamp devuelve el HTML original archivado,
+# sin la barra de herramientas de Wayback.
+extraer_captura <- function(timestamp, original, sel) {
+  wb_url <- paste0("http://web.archive.org/web/", timestamp, "id_/", original)
+
+  resp <- tryCatch(GET(wb_url, user_agent(UA), timeout(45)),
+                   error = function(e) { log_msg("  error red: ", original); NULL })
+  if (is.null(resp)) return(NULL)
+
+  sc <- status_code(resp)
+  if (sc != 200) {
+    log_msg("  HTTP ", sc, ": ", original)
+    if (sc == 429) { log_msg("  rate limit -> pausa de 60s"); Sys.sleep(60) }
+    return(NULL)
+  }
+
+  html <- tryCatch(read_html(content(resp, as = "text", encoding = "UTF-8")),
+                   error = function(e) NULL)
+  if (is.null(html)) { log_msg("  HTML ilegible: ", original); return(NULL) }
+
+  saca_texto <- function(selector) {
+    el <- html_element(html, selector)
+    if (length(el) == 0 || all(is.na(el))) return("")
+    limpiar(html_text2(el))
+  }
+
+  titulo <- saca_texto(sel$titulo)
+
+  el_fecha <- html_element(html, sel$fecha)
+  fecha <- if (length(el_fecha) == 0 || all(is.na(el_fecha))) "" else {
+    d <- html_attr(el_fecha, "datetime")
+    if (is.na(d)) limpiar(html_text2(el_fecha)) else d
+  }
+
+  cuerpo_el <- html_element(html, sel$cuerpo)
+  cuerpo <- if (length(cuerpo_el) == 0 || all(is.na(cuerpo_el))) "" else {
+    xml_remove(html_elements(cuerpo_el, "script, style, noscript"))
+    limpiar(html_text2(cuerpo_el))
+  }
+
+  tibble(
+    timestamp = as.character(timestamp),
+    url       = as.character(original),
+    fecha     = as.character(fecha),
+    titulo    = as.character(titulo),
+    cuerpo    = as.character(cuerpo)
+  )
+}
+
+ESQUEMA <- tibble(timestamp = character(), url = character(),
+                  fecha = character(), titulo = character(), cuerpo = character())
+
+descargar_ventana <- function(nombre, from, to) {
+  caps <- listar_capturas(nombre, from, to)
+  if (is.null(caps) || nrow(caps) == 0) return(NA_character_)
+
+  fichero <- file.path(OUT_DIR, paste0("corpus_", nombre, ".csv"))
+  sel <- selectores_de(nombre)
+
+  ya_hechas <- character(0)
+  if (file.exists(fichero)) {
+    hecho <- tryCatch(read_csv(fichero, show_col_types = FALSE),
+                      error = function(e) NULL)
+    if (!is.null(hecho) && "url" %in% names(hecho)) {
+      ya_hechas <- as.character(hecho$url)
+      log_msg(nombre, ": reanudando, ", length(ya_hechas), " ya guardadas.")
+    }
+  } else {
+    write_csv(ESQUEMA, fichero)
+  }
+
+  pendientes <- caps %>% filter(!(original %in% ya_hechas))
+  n <- nrow(pendientes)
+  log_msg(nombre, ": ", n, " capturas por descargar.")
+  if (n == 0) return(fichero)
+
+  fallos <- 0
+  for (i in seq_len(n)) {
+    fila <- pendientes[i, ]
+    datos <- extraer_captura(fila$timestamp, fila$original, sel)
+
+    if (!is.null(datos)) {
+      write_csv(datos, fichero, append = TRUE)
+    } else {
+      fallos <- fallos + 1
+    }
+
+    if (i %% 25 == 0) {
+      log_msg("  ", nombre, ": ", i, "/", n, " procesadas (", fallos, " fallos)")
+    }
+    pausa()
+  }
+
+  log_msg(nombre, ": COMPLETADA. ", n - fallos, " descargadas, ", fallos, " fallidas.")
+  fichero
+}
+
+# ---------------------------------------------------------------------------
+# Orquestación
+# ---------------------------------------------------------------------------
+main <- function() {
+  ficheros <- pmap_chr(
+    list(VENTANAS$nombre, VENTANAS$from, VENTANAS$to),
+    function(n, f, t) {
+      log_msg("=== Ventana: ", n, " (", f, " -> ", t, ") ===")
+      descargar_ventana(n, f, t)
+    }
+  )
+
+  validos <- !is.na(ficheros)
+  if (!any(validos)) { log_msg("No se descargó ninguna ventana."); return(invisible(NULL)) }
+
+  corpus <- map2_dfr(ficheros[validos], VENTANAS$nombre[validos], function(f, n) {
+    read_csv(f, show_col_types = FALSE) %>% mutate(ventana = n)
+  })
+
+  # Diagnóstico de cobertura: imprescindible para la memoria del TFM.
+  # Wayback NO archiva de forma aleatoria (favorece páginas enlazadas desde
+  # portada y con tráfico), así que los conteos de menciones son un LÍMITE
+  # INFERIOR, no la cifra real. Reporta estas tasas en metodología.
+  resumen <- corpus %>%
+    group_by(ventana) %>%
+    summarise(
+      noticias      = n(),
+      sin_titulo    = mean(titulo == ""),
+      sin_cuerpo    = mean(cuerpo == ""),
+      long_mediana  = median(nchar(cuerpo)),
+      .groups = "drop"
+    )
+  log_msg("--- Cobertura por ventana ---")
+  print(resumen)
+  write_csv(resumen, file.path(OUT_DIR, "diagnostico_cobertura.csv"))
+
+  write_csv(corpus, file.path(OUT_DIR, "corpus_completo.csv"))
+  log_msg("Corpus unificado: ", nrow(corpus), " noticias.")
+
+  invisible(corpus)
+}
+
+# ---------------------------------------------------------------------------
+# ANTES DE LANZAR: verifica los selectores
+#   1. Ejecuta solo la fase 1 de una ventana:
+#        caps <- listar_capturas("generales_2019A", "20190320", "20190428")
+#   2. Inspecciona una captura de esa lista:
+#        inspeccionar_captura(caps$timestamp[1], caps$original[1])
+#   3. Ajusta SEL_* (o SELECTORES_POR_VENTANA) si "NO ENCONTRADO".
+#   4. Repite para una captura de CADA ventana (el tema pudo cambiar).
+#   5. Entonces sí: corpus <- main()
+# ---------------------------------------------------------------------------
+
+ corpus <- main()
+```
+

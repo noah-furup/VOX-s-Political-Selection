@@ -1,0 +1,3098 @@
+---
+title: "TFM_CODE"
+author: "Noah Emanuel Fürup"
+format: html
+editor: visual
+---
+
+##Libraries
+
+```{r LIBRARIES}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+```
+
+##Charts of the Theoretical Framework
+
+ARREGLAR FRANCIA, NORUEGA que faltan
+
+
+```{r ELECTORAL SYSTEM MAP}
+electoral_system_database <-
+  read_excel("idea_export_electoral_system_design_database.xlsx") |> 
+  group_by(ISO3) |> 
+   slice_max(Year) |> 
+  ungroup() |> 
+  select(ISO3, Country, Year,
+         family = `Electoral system family`,
+         system = `Electoral system for national legislature`)
+ 
+europe <- 
+  ne_countries(scale = "medium", continent = "Europe", returnclass = "sf") |>
+  left_join(electoral_system_database, by = c("iso_a3" = "ISO3"))
+
+ggplot(europe) +
+  geom_sf(aes(fill = family), colour = "white", linewidth = 0.2) +
+  coord_sf(xlim = c(-25, 45), ylim = c(34, 72)) +
+  scale_fill_brewer(palette = "Set2", na.value = "grey90", name = "Electoral system family") +
+  labs(title = "Electoral systems in Europe",
+       caption = "Source: IDEA Electoral System Design Database") +
+  theme_void()
+
+```
+
+```{r share of each electoral family}
+europe |>
+  st_drop_geometry() |>
+  count(family) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  arrange(desc(n))
+```
+Maldita from Wayback Machine 
+https://maldita.es/malditodato/20240229/partidos-politicos-registro-ministerio-interior/
+https://files.maldita.es/uploads/2024/02/65df376828af1informefirma-1706550494955-pdf.pdf#toolbar=0
+
+```{r PARTY REGISTRY}
+party_registry_maldita <- read_csv("PARTY_REGISTRY_MALDITA_2024.csv", show_col_types = FALSE)
+
+party_registry_2026 <- read_excel("PARTY_REGISTRY_2026_09.xlsx", col_types = "text") |>
+  mutate(new_party = !is.na(registration_date),
+         party_id  = cumsum(new_party)) |>
+  group_by(party_id) |>
+  summarise(party             = str_squish(str_c(party, collapse = " ")),
+            address           = first(adress),
+            province          = first(province),
+            registration_date = first(registration_date),
+            .groups = "drop") |>
+  mutate(
+    party_name        = str_squish(str_remove(party, "\\(([^()]*)\\)$")),
+    abbreviation      = str_match(party, "\\(([^()]*)\\)$")[, 2],
+    town              = str_squish(str_remove(province, "\\(([^()]*)\\)$")),
+    province          = str_match(province, "\\(([^()]*)\\)$")[, 2],
+    registration_date = dmy(registration_date),
+    status            = "registered"
+  ) |>
+  select(party_name, abbreviation, registration_date, town, province, address, status)
+
+# parties registered after the 2024 list; some of them were already in it as "not registered"
+new_registrations <- party_registry_2026 |>
+  filter(registration_date > max(party_registry_maldita$registration_date, na.rm = TRUE))
+
+all_parties <- party_registry_maldita |>
+  left_join(new_registrations |>
+              select(party_name, new_date = registration_date, province, address),
+            by = "party_name") |>
+  mutate(registration_date = coalesce(registration_date, new_date),
+         status = if_else(!is.na(new_date) & status == "not registered", "registered", status)) |>
+  select(-new_date) |>
+  bind_rows(new_registrations |> anti_join(party_registry_maldita, by = "party_name")) |>
+  arrange(registration_date)
+```
+
+FE de las JONS aparece dos veces sin fecha de inscripción: protocolo 21 "(Novillo)" y 22 "(Zulueta)", que son las dos facciones que pidieron la inscripción en 1976. En cambio, party_register la da inscrita el 04/10/1976. Para la fecha de FE de las JONS usa esa.
+Alianza Popular (protocolo 961) sale sin fecha de inscripción. Es por cómo lo registra el Ministerio: el PP heredó la inscripción de AP.
+
+
+```{r TABLE OF FAR RIGHT PARTIES BEFORE VOX}
+casals_parties <- c(
+  "FUERZA NUEVA", "CENTRO DEMOCRATICO Y SOCIAL", "JUNTAS ESPAÑOLAS", "FRENTE NACIONAL",
+  "DEMOCRACIA NACIONAL", "MOVIMIENTO SOCIAL REPUBLICANO",
+  "PARTIDO DEL TRABAJO Y EMPLEO-AGRUPACION RUIZ MATEOS \"TRABAJO Y EMPLEO\"",
+  "GRUPO INDEPENDIENTE LIBERAL", "SOCIEDAD CIVIL Y DEMOCRACIA", "PLATAFORMA PER CATALUNYA", "ESPAÑA 2000",
+  "PARTIDO POR LA LIBERTAD", "ADÑ", "FALANGE ESPAÑOLA DE LAS J.O.N.S.", "LA FALANGE", "FALANGE ESPAÑOLA AUTENTICA",
+  "FALANGE AUTENTICA", "FALANGE 2.000", "\"NOSOTROS\" PARTIDO DE LA REGENERACIÓN SOCIAL",
+  "ALTERNATIVA ESPAÑOLA", "ALTERNATIVA DE GOVERN", "ALIANZA NACIONAL",
+  "SOBERANÍA Y LIBERTAD", "PUEBLO", "FRENTE: NACIONAL IDENTITARIO, PARTIDO NACIONALSOCIALISTA OBRERO ESPAÑOL",
+  "SOM IDENTITARIS",
+  # Via Democratica, split from PxC in 2010 (Casals); registered under its later name
+  "JUNTS PER TABARNIA - VIA DEMOCRÁTICA"
+)
+
+casals_registry <- bind_rows(all_parties, party_registry_2026) |>
+  filter(party_name %in% casals_parties, !is.na(registration_date)) |>
+  group_by(party_name) |>
+  slice_min(registration_date, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  select(party_name, abbreviation, registration_date, cancellation_date) |>
+  arrange(registration_date) |> 
+  mutate(party = party_name)
+
+far_right_table <- casals_registry |>
+  mutate(across(c(registration_date, cancellation_date), \(x) replace_na(format(x, "%d/%m/%Y"), "")),
+         abbreviation = replace_na(abbreviation, "")) |>
+  select(Party = party_name, Abbreviation = abbreviation,
+         Registered = registration_date, Cancelled = cancellation_date)
+
+stargazer(as.data.frame(far_right_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Far-right and right-wing populist parties since 1976",
+          notes = c("Source: Ministry of the Interior registry of political parties (Maldita 2024; update of September 2026).",
+                    "Parties selected following Casals (2020). Cancelled: date the party was struck off the registry."))
+```
+
+
+```{r FAMILY TREE FAR PARTIES 1977-2026}
+library(tidygraph)
+library(ggraph)
+
+# ---- 1. connections: `from` gave rise to `to` ------------------------------------------------------
+# type: "split / successor" = the new organisation comes out of the old one
+#       "coalition / merger" = the old one is part of a coalition, platform or merger
+#       "members / founders" = founders or members of the old one created or joined the new one
+far_right_links <- tribble(
+  ~from,                             ~to,                                ~type,                 ~year, ~source,
+  # Francoist dictatorship, mainstream right and Vox (Casals 2020)
+  "Francoist dictatorship",          "Alianza Popular",                  "members / founders",  1977L, "Casals (2020: 368)",
+  "Alianza Popular",                 "Partido Popular",                  "split / successor",   1989L, "Casals (2020: 368)",
+  "Partido Popular",                 "Vox",                              "split / successor",   2013L, "Casals (2020: 374, 379)",
+  "Sociedad Civil y Democracia",     "Vox",                              "members / founders",  2014L, "Casals (2020: 371)",
+  "Francoist dictatorship",          "Fuerza Nueva",                     "members / founders",  1976L, "Casals (2020: 366-367)",
+  "Fuerza Nueva",                    "Frente Nacional (1986)",           "split / successor",   1986L, "Casals (2020: 370)",
+  "Juntas Españolas",                "Alternativa Demócrata Nacional",   "coalition / merger",  1994L, "Casals (2020: 370)",
+  "Fuerza Nueva",                    "Alternativa Española",             "members / founders",  2003L, "Casals (2020: 379)",
+  "Partido Popular",                 "NOSOTROS",                         "members / founders",  2017L, "Ramos (2022: 165)",
+  # Falangism (Wikipedia: FE de las JONS (1976), FE Independiente, FE Auténtica, La Falange, Falange Auténtica)
+  "Francoist dictatorship",          "FE de las JONS",                   "members / founders",  1976L, "Wikipedia",
+  "Frente de Estudiantes Sindicalistas", "FE Independiente",             "split / successor",   1977L, "Wikipedia",
+  "FE de las JONS (Auténtica)",      "FE Auténtica",                     "split / successor",   1979L, "Wikipedia",
+  "FE Auténtica",                    "FE de las JONS",                   "members / founders",  1994L, "Wikipedia",
+  "FE de las JONS",                  "La Falange",                       "split / successor",   1999L, "Wikipedia",
+  "La Falange",                      "Falange Auténtica",                "split / successor",   2002L, "Wikipedia",
+  "FE Independiente",                "FE de las JONS",                   "coalition / merger",  2004L, "Wikipedia",
+  "Falange 2000",                    "FE de las JONS",                   "coalition / merger",  2004L, "Wikipedia",
+  "La Falange",                      "Frente Nacional (2006)",           "split / successor",   2005L, "Wikipedia",
+  "La Falange",                      "FE de las JONS",                   "coalition / merger",  2024L, "Wikipedia",
+  "FE de las JONS",                  "Comunidad Política Vértice",       "members / founders",  2018L, "Ramos (2022: 210)",
+  "Fuerza Nueva",                    "Frente de la Juventud",            "split / successor",   NA,    "Ramos (2022: 199)",
+  "Frente de la Juventud",           "ACIMJI",                           "members / founders",  2011L, "Ramos (2022: 199)",
+  # neo-Nazi and national-revolutionary (Ramos 2022)
+  "CEDADE",                          "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Acción Radical",                  "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Juntas Españolas",                "Democracia Nacional",              "members / founders",  1995L, "Ramos (2022: 126)",
+  "Alternativa Demócrata Nacional",  "Democracia Nacional",              "split / successor",   1995L, "Ramos (2022: 126)",
+  "Democracia Nacional",             "Plataforma España 2000",           "coalition / merger",  2000L, "Ramos (2022: 127)",
+  "Plataforma España 2000",          "España 2000",                      "split / successor",   2002L, "Ramos (2022: 130)",
+  "FE-Frente Nacional Sindicalista", "España 2000",                      "members / founders",  2002L, "Ramos (2022: 130)",
+  "Alianza por la Unidad Nacional",  "Alianza Nacional",                 "members / founders",  2005L, "Ramos (2022: 148)",
+  "AC Rey Sisebuto",                 "Alianza Nacional",                 "members / founders",  2005L, "Ramos (2022: 148)",
+  "CEDADE",                          "Hermandad Aria",                   "split / successor",   1995L, "Ramos (2022: 106)",
+  "CEDADE",                          "Devenir Europeo",                  "members / founders",  2007L, "Ramos (2022: 212)",
+  "Alternativa Europea",             "Movimiento Social Republicano",    "split / successor",   1999L, "Ramos (2022: 237)",
+  "Movimiento Social Republicano",   "Soberanía y Libertad",             "split / successor",   2014L, "Ramos (2022: 240)",
+  "Soberanía y Libertad",            "Pueblo",                           "split / successor",   2018L, "Ramos (2022: 241)",
+  "Movimiento Social Republicano",   "Hogar Social Madrid",              "members / founders",  2014L, "Ramos (2022: 168)",
+  "REFNI",                           "FNI-PNSOE",                        "split / successor",   2020L, "Ramos (2022: 242)",
+  # coalitions and platforms (Ramos 2022)
+  "Democracia Nacional",             "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Alianza Nacional",                "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Nudo Patriota Español",           "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "La Falange",                      "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "Movimiento Católico Español",     "La España en Marcha",              "coalition / merger",  2013L, "Ramos (2022: 235)",
+  "FE de las JONS",                  "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "La Falange",                      "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "Democracia Nacional",             "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "Alternativa Española",            "ADÑ",                              "coalition / merger",  2018L, "Ramos (2022: 157)",
+  "España 2000",                     "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Plataforma per Catalunya",        "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Partido por la Libertad",         "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145, 243)",
+  "Iniciativa por Albacete",         "Respeto",                          "coalition / merger",  2016L, "Ramos (2022: 145)",
+  # populist radical right in Catalonia (Ramos 2022)
+  "Fuerza Nueva",                    "Plataforma per Catalunya",         "members / founders",  2002L, "Ramos (2022: 238)",
+  "Plataforma Vigatana",             "Plataforma per Catalunya",         "split / successor",   2003L, "Ramos (2022: 238)",
+  "Plataforma per Catalunya",        "Vox",                              "members / founders",  2019L, "Ramos (2022: 243); Casals (2020: 373)",
+  "Plataforma per Catalunya",        "Som Catalans",                     "split / successor",   2014L, "Ramos (2022: 257)",
+  "Plataforma per Catalunya",        "Frente Nacional Identitario (Anglada)", "split / successor", 2015L, "Ramos (2022: 244)",
+  "Frente Nacional Identitario (Anglada)", "Som Identitaris",            "split / successor",   2016L, "Ramos (2022: 244)",
+  "Plataforma per Catalunya",        "Generación Identitaria",           "members / founders",  2016L, "Ramos (2022: 233)",
+  "Plataforma per Catalunya",        "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Movimiento Social Republicano",   "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Movimiento Patriótico Catalán",   "Casal Tramuntana",                 "members / founders",  2012L, "Ramos (2022: 226)",
+  "Democracia Nacional",             "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Somatemps",                       "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Generación Identitaria",          "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Legión Urbana",                   "Por España Me Atrevo",             "coalition / merger",  2016L, "Ramos (2022: 239)",
+  "Hermandad de Antiguos Caballeros Legionarios", "Legión Urbana",       "members / founders",  NA,    "Ramos (2022: 236)",
+  "Somatemps",                       "Tradició Catalana",                "members / founders",  2015L, "Ramos (2022: 247)",
+  "CEDADE",                          "Unitat Nacional Catalana",         "members / founders",  2000L, "Ramos (2022: 256)",
+  "Unitat Nacional Catalana",        "Moviment Identitari Català",       "members / founders",  2015L, "Ramos (2022: 255)",
+  # identitarian and neo-fascist groups (Ramos 2022)
+  "Iberia Cruor",                    "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "Acción Social Cádiz",             "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "El Galeón",                       "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "Málaga 1487",                     "Hacer Nación",                     "coalition / merger",  2020L, "Ramos (2022: 180)",
+  "España 2000",                     "Hacer Nación",                     "members / founders",  2020L, "Ramos (2022: 180)",
+  "Vox",                             "Hacer Nación",                     "members / founders",  2020L, "Ramos (2022: 180)",
+  "Lo Nuestro",                      "El Galeón",                        "split / successor",   2018L, "Ramos (2022: 188)",
+  # people who later joined Vox (Ramos 2022)
+  "España 2000",                     "Vox",                              "members / founders",  2019L, "Ramos (2022: 106, 159)",
+  "Hermandad Aria",                  "Vox",                              "members / founders",  2019L, "Ramos (2022: 106)",
+  "Acción Radical",                  "Vox",                              "members / founders",  2019L, "Ramos (2022: 106, 159)",
+  "Partido por la Libertad",         "Vox",                              "members / founders",  2019L, "Ramos (2022: 106)",
+  "Vox",                             "Regeneración",                     "split / successor",   2019L, "Ramos (2022: 159)",
+  "Regeneración",                    "Identitarios",                     "split / successor",   2019L, "Ramos (2022: 159)"
+)
+
+# ---- 2. nodes: family and founding year --------------------------------------------------------------------
+# documented = FALSE: the sources give no founding year, so `founded` is an approximate year of activity
+far_right_nodes <- tribble(
+  ~name,                                          ~family,                                ~founded, ~documented,
+  "Francoist dictatorship",                       "Francoist dictatorship",               1939L,     TRUE,
+  "Alianza Popular",                              "Mainstream right",                     1976L,     TRUE,
+  "Partido Popular",                              "Mainstream right",                     1989L,     TRUE,
+  "Sociedad Civil y Democracia",                  "Mainstream right",                     2011L,     TRUE,
+  "Vox",                                          "Vox",                                  2013L,     TRUE,
+  "Regeneración",                                 "Vox",                                  2019L,     TRUE,
+  "Identitarios",                                 "Vox",                                  2019L,     TRUE,
+  "NOSOTROS",                                     "Vox",                                  2017L,     TRUE,
+  "Fuerza Nueva",                                 "Neo-Francoism / national-Catholicism", 1976L,     TRUE,
+  "Frente Nacional (1986)",                       "Neo-Francoism / national-Catholicism", 1986L,     TRUE,
+  "Juntas Españolas",                             "Neo-Francoism / national-Catholicism", 1984L,     TRUE,
+  "Alternativa Española",                         "Neo-Francoism / national-Catholicism", 2003L,     TRUE,
+  "Alianza por la Unidad Nacional",               "Neo-Francoism / national-Catholicism", 1995L,     TRUE,
+  "Movimiento Católico Español",                  "Neo-Francoism / national-Catholicism", 1982L,     TRUE,
+  "Frente de la Juventud",                        "Neo-Francoism / national-Catholicism", 1980L,     FALSE,   # active in 1980-1981 (Ramos 2022: 199)
+  "ACIMJI",                                       "Neo-Francoism / national-Catholicism", 2011L,     TRUE,
+  "Nudo Patriota Español",                        "Neo-Francoism / national-Catholicism", 2011L,     FALSE,   # before La España en Marcha (2013)
+  "Somatemps",                                    "Neo-Francoism / national-Catholicism", 2013L,     TRUE,
+  "Tradició Catalana",                            "Neo-Francoism / national-Catholicism", 2015L,     TRUE,
+  "Legión Urbana",                                "Neo-Francoism / national-Catholicism", 2014L,     FALSE,   # before Por España Me Atrevo (2016)
+  "Hermandad de Antiguos Caballeros Legionarios", "Neo-Francoism / national-Catholicism", 1985L,     FALSE,   # active "for decades" (Ramos 2022: 239)
+  "Movimiento Patriótico Catalán",                "Neo-Francoism / national-Catholicism", 1994L,     FALSE,   # Wikidata
+  "FE de las JONS",                               "Falangism",                            1976L,     TRUE,
+  "FE Independiente",                             "Falangism",                            1977L,     TRUE,
+  "FE de las JONS (Auténtica)",                   "Falangism",                            1976L,     TRUE,
+  "FE Auténtica",                                 "Falangism",                            1979L,     TRUE,
+  "La Falange",                                   "Falangism",                            1999L,     TRUE,
+  "Falange Auténtica",                            "Falangism",                            2002L,     TRUE,
+  "Falange 2000",                                 "Falangism",                            2000L,     TRUE,
+  "Frente Nacional (2006)",                       "Falangism",                            2006L,     TRUE,
+  "Frente de Estudiantes Sindicalistas",          "Falangism",                            1963L,     TRUE,
+  "FE-Frente Nacional Sindicalista",              "Falangism",                            1996L,     TRUE,
+  "Comunidad Política Vértice",                   "Falangism",                            2018L,     TRUE,
+  "CEDADE",                                       "Neo-Nazi / national-revolutionary",    1966L,     TRUE,
+  "Acción Radical",                               "Neo-Nazi / national-revolutionary",    1990L,     FALSE,   # dismantled in 1993 (Ramos 2022: 229)
+  "Democracia Nacional",                          "Neo-Nazi / national-revolutionary",    1995L,     TRUE,
+  "Alternativa Demócrata Nacional",               "Neo-Nazi / national-revolutionary",    1994L,     TRUE,
+  "Alianza Nacional",                             "Neo-Nazi / national-revolutionary",    2005L,     TRUE,
+  "AC Rey Sisebuto",                              "Neo-Nazi / national-revolutionary",    2003L,     FALSE,   # before Alianza Nacional (2005)
+  "Hermandad Aria",                               "Neo-Nazi / national-revolutionary",    1995L,     TRUE,
+  "Devenir Europeo",                              "Neo-Nazi / national-revolutionary",    2007L,     TRUE,
+  "Alternativa Europea",                          "Neo-Nazi / national-revolutionary",    1994L,     FALSE,   # active in 1994 (Ramos 2022: 451)
+  "Movimiento Social Republicano",                "Neo-Nazi / national-revolutionary",    1999L,     TRUE,
+  "Soberanía y Libertad",                         "Neo-Nazi / national-revolutionary",    2014L,     TRUE,
+  "Pueblo",                                       "Neo-Nazi / national-revolutionary",    2018L,     TRUE,
+  "REFNI",                                        "Neo-Nazi / national-revolutionary",    2017L,     TRUE,
+  "FNI-PNSOE",                                    "Neo-Nazi / national-revolutionary",    2020L,     TRUE,
+  "Plataforma España 2000",                       "Populist radical right",               2000L,     TRUE,
+  "España 2000",                                  "Populist radical right",               2002L,     TRUE,
+  "Plataforma per Catalunya",                     "Populist radical right",               2002L,     TRUE,
+  "Plataforma Vigatana",                          "Populist radical right",               2002L,     TRUE,
+  "Partido por la Libertad",                      "Populist radical right",               2013L,     TRUE,
+  "Iniciativa por Albacete",                      "Populist radical right",               2015L,     FALSE,   # before Respeto (2016)
+  "Frente Nacional Identitario (Anglada)",        "Populist radical right",               2015L,     TRUE,
+  "Som Identitaris",                              "Populist radical right",               2016L,     TRUE,
+  "Casal Tramuntana",                             "Populist radical right",               2012L,     TRUE,
+  "Hacer Nación",                                 "Identitarian / neo-fascist groups",    2020L,     TRUE,
+  "Iberia Cruor",                                 "Identitarian / neo-fascist groups",    2008L,     TRUE,
+  "Acción Social Cádiz",                          "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "El Galeón",                                    "Identitarian / neo-fascist groups",    2018L,     TRUE,
+  "Málaga 1487",                                  "Identitarian / neo-fascist groups",    2013L,     TRUE,
+  "Lo Nuestro",                                   "Identitarian / neo-fascist groups",    2016L,     FALSE,   # before El Galeón (2018)
+  "Hogar Social Madrid",                          "Identitarian / neo-fascist groups",    2014L,     TRUE,
+  "Generación Identitaria",                       "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "Por España Me Atrevo",                         "Identitarian / neo-fascist groups",    2016L,     TRUE,
+  "Som Catalans",                                 "Catalan independentist far right",     2014L,     TRUE,
+  "Unitat Nacional Catalana",                     "Catalan independentist far right",     2000L,     TRUE,
+  "Moviment Identitari Català",                   "Catalan independentist far right",     2015L,     TRUE,
+  "La España en Marcha",                          "Coalitions",                           2013L,     TRUE,
+  "ADÑ",                                          "Coalitions",                           2018L,     TRUE,
+  "Respeto",                                      "Coalitions",                           2016L,     TRUE
+)
+
+# every organisation in the links needs a row in the nodes table (must return 0 rows)
+tibble(name = unique(c(far_right_links$from, far_right_links$to))) |>
+  anti_join(far_right_nodes, by = "name")
+
+# ---- 3. position of each node ----------------------------------------------------------------------------
+# x = founding year; y = one horizontal band per family
+family_order <- c("Francoist dictatorship", "Mainstream right", "Vox", "Coalitions", "Populist radical right",
+                  "Identitarian / neo-fascist groups", "Catalan independentist far right",
+                  "Neo-Nazi / national-revolutionary", "Neo-Francoism / national-Catholicism", "Falangism")
+
+far_right_nodes <- far_right_nodes |>
+  mutate(x    = pmax(founded, 1965L),               # the dictatorship (1939) is drawn at the left edge
+         band = match(family, family_order)) |>
+  group_by(family) |>
+  arrange(x, .by_group = TRUE) |>
+  mutate(y = band * 9 + (row_number() %% 5) * 1.6) |>   # stagger names inside each band
+  ungroup() |>
+  select(-band)
+
+far_right_graph <- tbl_graph(nodes = far_right_nodes, edges = far_right_links, directed = TRUE)
+
+# ---- 4. plot -----------------------------------------------------------------------------------------------
+family_colours <- c(
+  "Francoist dictatorship"               = "#3B3B3B",
+  "Mainstream right"                     = "#1F77B4",
+  "Vox"                                  = "#2CA02C",
+  "Coalitions"                           = "#7F7F7F",
+  "Populist radical right"               = "#FF7F0E",
+  "Identitarian / neo-fascist groups"    = "#9467BD",
+  "Catalan independentist far right"     = "#E6AB02",
+  "Neo-Nazi / national-revolutionary"    = "#000000",
+  "Neo-Francoism / national-Catholicism" = "#8C564B",
+  "Falangism"                            = "#D62728"
+)
+
+ggraph(far_right_graph, layout = "manual", x = x, y = y) +
+  geom_edge_arc(aes(colour = type), strength = 0.1,
+                arrow = arrow(length = unit(1.5, "mm"), type = "closed"),
+                end_cap = circle(2.2, "mm"), edge_width = 0.35, alpha = 0.55) +
+  geom_node_point(aes(colour = family, fill = if_else(documented, family, "approximate")),
+                  shape = 21, size = 3, stroke = 0.9) +
+  geom_node_text(aes(label = name, colour = family), size = 2.4, repel = TRUE, max.overlaps = Inf,
+                 segment.colour = "grey85", segment.size = 0.2, show.legend = FALSE) +
+  scale_colour_manual(values = family_colours, breaks = family_order, name = NULL) +
+  scale_fill_manual(values = c(family_colours, approximate = "white"), guide = "none") +
+  scale_edge_colour_manual(values = c("split / successor"  = "#D62728",
+                                      "coalition / merger" = "#1F77B4",
+                                      "members / founders" = "grey60"),
+                           name = NULL) +
+  scale_x_continuous(breaks = c(1965, seq(1975, 2025, 5)), labels = c("<1975", seq(1975, 2025, 5)),
+                     expand = expansion(add = 2)) +
+  scale_y_reverse() +
+  labs(title = "Family tree of the Spanish far right, 1975-2026",
+       subtitle = "Each arrow goes from an organisation to the one that came out of it, joined a coalition with it or supplied its members. Hollow dots: approximate year",
+       caption = "Sources: Ramos (2022), Casals (2020), Wikipedia (Falangist parties)",
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_line(colour = "grey93"),
+        axis.text.y = element_blank(),
+        legend.position = "bottom", legend.box = "vertical",
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 9, colour = "grey35"))
+```
+HACERLO FACETED, FALANGE, 
+
+
+
+```{r}
+library(tidyverse)
+library(grid)
+
+
+```
+
+https://web.archive.org/web/20140209110219/http://www.reconversion.es/
+
+```{r TABLE SIGNEES RECONVERSION.ES}
+
+signees_reconversion <- read_html("https://web.archive.org/web/20140202204018/http://www.reconversion.es/firmantes/") |>
+  html_text2() |>
+  str_split("\n") |>
+  unlist() |>
+  str_squish() |> 
+  keep(~ str_detect(.x, ",")) |>
+  keep(~ str_count(.x, ",") >= 1) |>
+  keep(~ str_length(.x) > 3) |> 
+  str_split_fixed(",", 2) |> 
+  as_tibble(.name_repair = "minimal") |> 
+  set_names(c("surname", "given_name")) |>
+  mutate(
+    surname = str_squish(surname),
+    given_name = str_squish(given_name),
+    name = paste(given_name, surname)
+  ) |>
+  select(name) |> 
+  slice(-c(1, n()))
+
+signees_reconversion
+```
+
+
+```{r TABLE OF VOX'S FOUNDERS}
+founders <- tribble(
+  ~name,                              ~relationship_with_vox,                                      ~origin,
+
+  "Alejo Vidal-Quadras",
+  "First party President and Candidate for the 2014 European elections",
+  "President of the Catalan branch of the PP, member of its national executive; Director of FAES, DENAES",
+
+  "Ana Velasco Vidal-Abarca",
+  "Militant",
+  "Villasneros Foundation",
+
+  "Cristina Seguí",
+  "Ex-militant",
+  "-",
+
+  "Enrique Álvarez López",
+  "Militant",
+  "-",
+
+  "Ignacio Camuñas Solís",
+  "Ex-Vice-President and ex-President",
+  "Co-founder and ex Minister of UCD",
+
+  "Iván Espinosa de los Monteros",
+  "Spokesman, former Vice-President, ex-General Secretariat",
+  "Ex-Secretary of DENAES",
+
+  "José Antonio Ortega Lara",
+  "Militant",
+  "Ex-militant of the PP",
+
+  "José Luis González Quirós",
+  "Second President (ad interim), ex-militant",
+  "UCD, CDS, ex-militant of PP, FAES",
+
+  "María Jesús Prieto-Laffargue",
+  "Ex-militant",
+  "General Direction in the first Aznar Government (PP)",
+
+  "Santiago Abascal",
+  "President",
+  "PP, President of DENAES"
+)
+
+founders_table <- founders |>
+  select(Name = name, `Relationship with Vox` = relationship_with_vox, Origin = origin)
+
+stargazer(as.data.frame(founders_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Founders of Vox",
+          notes = "Founding members of Vox and their relationship with the party.")
+```
+
+
+# Data Extraction
+
+## General elections
+
+Extraction of general elections candidates: european and general elections via github.com/JaimeObregon/infoelectoral
+
+
+
+```{r GITHUB AND INTERIOR MINISTERY PORTAL}
+GITHUB <- "https://raw.githubusercontent.com/JaimeObregon/infoelectoral/main/files"
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+```
+
+The github has the files in .DAT, a file type that doesn't separate in ";" or "\|". In order to separate each column, we need to map where the separation between each variable occurs. I asked Claude to give me the exact character positions where the separation is. I used fwf_positions of ReadR to write down the column names, given the positions where the variables lie in the .DAT file.
+
+EXPLICAR COMO FUNCIONAN LO DE 02197706_TOTA y decir que el github copia la estructura del ministerio
+
+```{r FIXED POSITIONS}
+# positions of each variable in the .DAT files
+cols_parties <- fwf_cols(
+  party_code   = c(9, 14),
+  abbreviation = c(15, 64),
+  party_name   = c(65, 214)
+)
+
+cols_candidates <- fwf_cols(
+  province_code  = c(10, 11),
+  party_code     = c(16, 21),
+  list_position  = c(22, 24),
+  candidate_type = c(25, 25),
+  candidate      = c(26, 100),
+  sex            = c(101, 101),
+  elected        = c(120, 120)
+)
+```
+
+```{r GENERAL AND EUROPEAN ELECTIONS TIBBLE (2014-2024)}
+elections <- tribble(
+  ~process, ~year,  ~month, ~chamber,              ~mirror_folder,
+  "02",     "1977", "06",   "Congress",            "congreso",
+  "02",     "1979", "03",   "Congress",            "congreso",
+  "02",     "1982", "10",   "Congress",            "congreso",
+  "02",     "1986", "06",   "Congress",            "congreso",
+  "02",     "1989", "10",   "Congress",            "congreso",
+  "02",     "1993", "06",   "Congress",            "congreso",
+  "02",     "1996", "03",   "Congress",            "congreso",
+  "02",     "2000", "03",   "Congress",            "congreso",
+  "02",     "2004", "03",   "Congress",            "congreso",
+  "02",     "2008", "03",   "Congress",            "congreso",
+  "02",     "2011", "11",   "Congress",            "congreso",
+  "02",     "2015", "12",   "Congress",            "congreso",
+  "02",     "2016", "06",   "Congress",            "congreso",
+  "02",     "2019", "04",   "Congress",            "congreso",
+  "02",     "2019", "11",   "Congress",            "congreso",
+  "02",     "2023", "07",   "Congress",            "congreso",
+  "03",     "1977", "06",   "Senate",              "senado",
+  "03",     "1979", "03",   "Senate",              "senado",
+  "03",     "1982", "10",   "Senate",              "senado",
+  "03",     "1986", "06",   "Senate",              "senado",
+  "03",     "1989", "10",   "Senate",              "senado",
+  "03",     "1993", "06",   "Senate",              "senado",
+  "03",     "1996", "03",   "Senate",              "senado",
+  "03",     "2000", "03",   "Senate",              "senado",
+  "03",     "2004", "03",   "Senate",              "senado",
+  "03",     "2008", "03",   "Senate",              "senado",
+  "03",     "2011", "11",   "Senate",              "senado",
+  "03",     "2015", "12",   "Senate",              "senado",
+  "03",     "2016", "06",   "Senate",              "senado",
+  "03",     "2019", "04",   "Senate",              "senado",
+  "03",     "2019", "11",   "Senate",              "senado",
+  "03",     "2023", "07",   "Senate",              "senado",
+  "07",     "2014", "05",   "European Parliament", "europeas",
+  "07",     "2019", "05",   "European Parliament", "europeas",
+  "07",     "2024", "06",   "European Parliament", "europeas"
+)
+```
+
+CHEQUEAR SI SE PUEDE MEJORAR CODIGO DE DESCARGA DE DATOS GENERALS
+
+types of processes: 02 = congress, 03 = Senate, 07 = European Parliament
+
+```{r ADD SOURCE AND PATH OF EACH ELECTION}
+elections <-
+  elections |>
+  mutate(
+    folder    = str_c(process, year, month, "_TOTA"),
+    code      = str_c(process, str_sub(year, 3, 4), month),
+    on_github = !(year %in% c("2023", "2024") |
+                    (chamber == "Congress" & year %in% c("1989", "1993"))),
+    path      = if_else(on_github,
+                        str_c(GITHUB, "/", mirror_folder, "/", folder, "/"),
+                        str_c(tempdir(), "/", folder, "/"))
+  )
+
+```
+
+```{r DOWNLOAD NON-GITHUB DATA TO TEMPORARY FOLDER}
+for (folder in elections$folder[!elections$on_github]) {
+  zip_file <- tempfile(fileext = ".zip")
+  download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file, mode = "wb",
+                method = "libcurl", headers = c("User-Agent" = "Mozilla/5.0"))
+  unzip(zip_file, exdir = str_c(tempdir(), "/", folder), junkpaths = TRUE)
+}
+```
+
+```{r READ CANDIDATES FROM PATH}
+
+# candidates of every election (file 04)
+candidates <- elections |>
+  rowwise() |>
+  reframe(
+    folder, chamber, year, month,
+    read_fwf(str_c(path, "04", code, ".DAT"), cols_candidates,
+             locale = locale(encoding = "ISO-8859-1"), col_types = cols(.default = "c"))
+  )
+
+candidates
+```
+
+```{r JOIN PARTIES TO CANDIDATES}
+# parties of every election (file 03)
+parties <- elections |>
+  rowwise() |>
+  reframe(
+    folder,
+    read_fwf(str_c(path, "03", code, ".DAT"), cols_parties,
+             locale = locale(encoding = "ISO-8859-1"), col_types = cols(.default = "c"))
+  )
+
+all_candidates <-
+  candidates |> 
+  left_join(parties,   by = c("folder", "party_code"))
+
+all_candidates
+```
+
+```{r JOIN PROVINCE TO CANDIDATES}
+provinces <- tribble(
+  ~province_code, ~province,
+  "01", "Araba/Alava",    "02", "Albacete",      "03", "Alicante",
+  "04", "Almeria",        "05", "Avila",         "06", "Badajoz",
+  "07", "Illes Balears",  "08", "Barcelona",     "09", "Burgos",
+  "10", "Caceres",        "11", "Cadiz",         "12", "Castellon",
+  "13", "Ciudad Real",    "14", "Cordoba",       "15", "A Coruna",
+  "16", "Cuenca",         "17", "Girona",        "18", "Granada",
+  "19", "Guadalajara",    "20", "Gipuzkoa",      "21", "Huelva",
+  "22", "Huesca",         "23", "Jaen",          "24", "Leon",
+  "25", "Lleida",         "26", "La Rioja",      "27", "Lugo",
+  "28", "Madrid",         "29", "Malaga",        "30", "Murcia",
+  "31", "Navarra",        "32", "Ourense",       "33", "Asturias",
+  "34", "Palencia",       "35", "Las Palmas",    "36", "Pontevedra",
+  "37", "Salamanca",      "38", "S.C. Tenerife", "39", "Cantabria",
+  "40", "Segovia",        "41", "Sevilla",       "42", "Soria",
+  "43", "Tarragona",      "44", "Teruel",        "45", "Toledo",
+  "46", "Valencia",       "47", "Valladolid",    "48", "Bizkaia",
+  "49", "Zamora",         "50", "Zaragoza",      "51", "Ceuta",
+  "52", "Melilla",        "99", "Single national constituency"
+)
+
+ all_candidates <-
+  all_candidates |>
+  left_join(provinces, by = "province_code")
+ 
+ all_candidates 
+```
+
+```{r MUTATE AND SELECT VARIABLES OF ALL_CANDIDATES}
+
+all_candidates <-
+  all_candidates |> 
+  mutate(
+    election      = str_c(if_else(chamber == "European Parliament", "european", "general"),
+                          "_", year, "_", month),
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex           = case_match(sex, "M" ~ "Male", "F" ~ "Female"),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation,
+    level         = "National",
+    .keep = "none"
+  )
+all_candidates
+```
+
+
+
+
+```{r TAKE DON/ DOÑA OUT}
+all_candidates <- 
+  all_candidates |>
+  mutate(candidate = str_remove(candidate,
+                                regex("^(don|do[ñn]a|d[.ª])\\s+", ignore_case = TRUE)))
+```
+
+```{r FILTER PP, CS AND VOX}
+pp_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "PP"))
+
+vox_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "VOX"))
+
+cs_candidates <- all_candidates |> 
+  filter(str_detect(abbreviation, "C's"))
+```
+
+
+```{r FILTER HISTORICAL RADICAL RIGHT PARTIES}
+radical_right_candidates <- bind_rows(
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "01 Generales"),
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "02 Europeas"))
+
+```
+
+## Autonomical Elections
+
+Claude Code For Autonomical elections: two attempts to confirm it is reproducible.
+
+Prompt 1:
+
+"Quiero que busques todas las listas de todas las elecciones autonómicas que han habido en España desde 2015 hasta 2026 y que pongas en el archivo excel en el excel de CANDIDATOS_AUTONOMICAS. Tienes que ir a la web para recopilar las siguientes variables de cada eleccion: CANDIDATO, CCAA, ELECCION, CIRCUNSCRIPCION, ORDEN, ELEGIDO (TRUE/FALSE)"
+
+Prompt 2:
+
+"You're a Computational Social Scientist. I want you to search for every candidate list of all autonomical elections in Spain from 2015 to 2026 of the following parties: PP and VOX. You have to get into the web and recopilate the following variables for each election:
+
+election: election (write it in like this: "autonomous_2015_05", where 2015 would be the year and 05 the month where the election took place) year: year of the election chamber: the chamber (such as Parlament of Andalucia, Parlament of Catalonia...) province: the province that was being represented by the candidate list_position: the position of the candidate within that list candidate: the candidate's full name is_titular: whether he was the titular of that seat or he was a substitution candidate (TRUE/FALSE), is_elected: whether he was elected (TRUE/FALSE) abbreviation: the abbreviation of the party's name
+
+the final file should be a csv file."
+
+
+
+
+```{r AUTONOMICAL CANDIDATES 2000-2012 PP}
+autonomical_pre2015 <-
+  read_csv("autonomicas_scrape/out_pre2015/pp_autonomicas_2000_2012.csv") |> 
+  mutate(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex,
+    is_titular,
+    is_elected,   
+    abbreviation,
+    level         = "Autonomical",
+    .keep = "none")
+
+autonomical_pre2015
+```
+
+```{r AUTONOMICAL CANDIDATES 2015-2026 PP AND VOX}
+autonomical_2015_2026 <- 
+  read_csv("candidatos_pp_vox_autonomicas_2015_2026.csv") |>
+  mutate(
+    election,
+    year          = as.integer(year),
+    chamber,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish(),
+    sex,
+    is_titular,
+    is_elected,
+    abbreviation,
+    level         = "Autonomical",
+    .keep = "none")
+```
+
+```{r FILTER PP AND VOX}
+autonomical_candidates <- bind_rows(autonomical_pre2015, autonomical_2015_2026)
+
+pp_candidates__autonomical <- autonomical_candidates |> 
+  filter(str_detect(abbreviation, "PP"))
+
+vox_candidates_autonomical <- autonomical_candidates |> 
+  filter(str_detect(abbreviation, "VOX"))
+
+vox_candidates_autonomical
+```
+
+```{r READ CIUDADANOS CANDIDATES AUTONOMICAL 2015-2026}
+cs_candidates_autonomical <- 
+  read_csv("candidatos_cs_autonomicas_2015_2026.csv") |> 
+  select(election, year, chamber, province, list_position, candidate, sex, is_titular, is_elected, abbreviation) |> 
+  mutate(sex = if_else(str_detect(sex, "Mujer"), "Female", "Male"))
+
+cs_candidates_autonomical
+```
+
+
+```{r RADICAL RIGHT CANDIDATES}
+radical_right_candidates <- bind_rows(radical_right_candidates,
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "03 Autonomicas")
+) |>
+  mutate(candidate = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+```
+
+```{r JOIN GENERAL ELECTIONS AND AUTONOMICAL}
+pp_candidates <-
+  bind_rows(pp_candidates, pp_candidates__autonomical)
+
+vox_candidates <-
+  bind_rows(vox_candidates, vox_candidates_autonomical)
+
+cs_candidates <-
+  bind_rows(cs_candidates, cs_candidates_autonomical)
+```
+
+
+# Municipal Elections
+
+
+```{r READ ALL VOX MUNICIPAL CANDIDATES}
+# municipality -> province, from the INE list (one sheet per province). The key
+# ignores accents, case and the order of the bilingual halves, because the file
+# writes "Alicante/Alacant" and the INE "Alacant/Alicante".
+municipalities <- list()
+for (s in excel_sheets("26codmun.xlsx")) {
+  municipalities[[s]] <- read_excel("26codmun.xlsx", sheet = s, skip = 2,
+                                    col_types = "text") |>
+    filter(!is.na(CMUN)) |>
+    transmute(province_code = CPRO, municipality = NOMBRE)
+}
+municipalities <- bind_rows(municipalities) |>
+  left_join(provinces, by = "province_code") |>
+  mutate(muni_key = municipality |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  distinct(muni_key, province)
+
+municipal_vox <- readxl::read_xlsx("CANDIDATOS_MUNICIPALES.xlsx") |>
+  mutate(muni_key = CIRCUNSCRIPCION |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(~ str_c(sort(str_squish(.x)), collapse = "/"))) |>
+  left_join(municipalities, by = "muni_key", relationship = "many-to-many")
+
+# a municipality name shared by several provinces ("Villanueva", "Castrillo"...)
+# duplicates the rows: keep the province that belongs to the list's region, taken
+# from the names that are not shared
+region_provinces <- municipal_vox |>
+  group_by(ELECCION, CIRCUNSCRIPCION, ORDEN) |>
+  filter(n() == 1) |>
+  ungroup() |>
+  distinct(CCAA, province)
+
+municipal_vox <- municipal_vox |>
+  group_by(ELECCION, CIRCUNSCRIPCION, ORDEN) |>
+  filter(n() == 1 | province %in% region_provinces$province[region_provinces$CCAA == first(CCAA)]) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  transmute(
+    election      = ELECCION,
+    year          = as.integer(str_extract(ELECCION, "\\d{4}")),
+    chamber       = CIRCUNSCRIPCION,   # the municipality
+    province,                          # its province, from the INE list
+    list_position = as.integer(ORDEN),
+    candidate     = CANDIDATO,
+    is_elected    = ELEGIDO,
+    source        = FUENTE,
+    level         = "Municipal"
+  )
+# municipalities the INE list no longer carries under that name (it is dated
+# 1 January 2026 and these data reach 2015), assigned by hand
+manual_provinces <- tribble(
+  ~chamber,                       ~province_manual,
+  "Castell-Platja d'Aro",         "Girona",
+  "Sant Carles de la Ràpita",     "Tarragona",
+  "Moncada",                      "Valencia",
+  "Alfarp",                       "Valencia",
+  "Castelló de la Plana",         "Castellon",
+  "Guadiana del Caudillo",        "Badajoz",
+  "Maó-Mahón",                    "Illes Balears"
+)
+
+municipal_vox <- municipal_vox |>
+  left_join(manual_provinces, by = "chamber") |>
+  mutate(province = coalesce(province, province_manual)) |>
+  select(-province_manual)
+```
+
+VER SI SOLO CONCURRIO EN 646 municipios de 8116 en 2019
+
+```{r READ ALL PP MUNICIPAL CANDIDATES}
+# PP candidates in the municipal elections. The ministry's file 04 for municipal
+# elections carries the municipality, and up to 2003 the name is in one field, so
+# read 26-100 as a single block: in the split layout the three fields are adjacent
+# and str_squish collapses the padding to the same result.
+PORTAL <- "https://infoelectoral.interior.gob.es/estaticos/docxl/apliextr"
+dir.create("datos_pp_locales", showWarnings = FALSE)
+
+cols_04_local <- fwf_cols(
+  province_code  = c( 10,  11),
+  muni_code      = c( 13,  15),   # 12 is a control digit
+  party_code     = c( 16,  21),
+  list_position  = c( 22,  24),
+  candidate_type = c( 25,  25),
+  full_name_cand = c( 26, 100),
+  sex            = c(101, 101),
+  elected        = c(120, 120)
+)
+latin1 <- locale(encoding = "ISO-8859-1")
+
+# file 03: candidacies (parties)
+cols_03 <- fwf_cols(
+  party_code   = c(  9,  14),
+  abbreviation = c( 15,  64),
+  full_name    = c( 65, 214)
+)
+
+# municipality names, one sheet per province
+municipalities <- list()
+for (s in excel_sheets("26codmun.xlsx")) {
+  municipalities[[s]] <- read_excel("26codmun.xlsx", sheet = s, skip = 2,
+                                    col_types = "text")
+}
+municipalities <- bind_rows(municipalities) |>
+  filter(!is.na(CMUN)) |>
+  transmute(province_code = CPRO, muni_code = CMUN, municipality = NOMBRE)
+
+local_candidates <- list()
+years <- c("2003", "2007", "2011", "2015", "2019", "2023")
+
+for (i in seq_along(years)) {
+
+  folder   <- str_c("04", years[i], "05_TOTA")
+  zip_file <- str_c("datos_pp_locales/", folder, ".zip")
+  unzip_to <- tempfile()
+
+  if (!file.exists(zip_file))
+    download.file(str_c(PORTAL, "/", folder, ".zip"), zip_file, mode = "wb", quiet = TRUE)
+  unzip(zip_file, exdir = unzip_to)
+
+  path_03 <- list.files(unzip_to, "^03.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+  path_04 <- list.files(unzip_to, "^04.*[.]DAT$", full.names = TRUE,
+                        recursive = TRUE, ignore.case = TRUE)[1]
+
+  # the full name is the reliable filter: many local parties are abbreviated PPx
+  # ("PPN" is Partido Progresista Nerjeño, "P.P.SO." Plataforma del Pueblo Soriano)
+  parties <- read_fwf(path_03, cols_03, locale = latin1,
+                      col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    filter(str_detect(stringi::stri_trans_general(str_to_upper(full_name),
+                                                  "Latin-ASCII"),
+                      "PARTIDO POPULAR|PARTIT POPULAR"))
+
+  message("Reading municipal ", years[i], " ...")
+
+  local_candidates[[i]] <- read_fwf(path_04, cols_04_local, locale = latin1,
+                                    col_types = cols(.default = "c")) |>
+    mutate(across(everything(), str_trim)) |>
+    inner_join(parties, by = "party_code") |>
+    mutate(year = years[i])
+}
+
+municipal_pp <- bind_rows(local_candidates) |>
+  left_join(municipalities, by = c("province_code", "muni_code")) |>
+  left_join(provinces, by = "province_code") |>
+  transmute(
+    election      = str_c("municipal_", year, "_05"),
+    year          = as.integer(year),
+    chamber       = municipality,
+    province,
+    list_position = as.integer(list_position),
+    candidate     = str_squish(full_name_cand),
+    sex           = recode(sex, "M" = "Male", "F" = "Female", .default = NA_character_),
+    is_titular    = candidate_type == "T",
+    is_elected    = elected == "S",
+    abbreviation  = "PP",
+    level         = "Municipal"
+  ) |>
+  arrange(year, province, chamber, list_position)
+```
+
+```{r READ ALL CS MUNICIPAL CANDIDATES}
+municipal_cs <- read_excel("CANDIDATOS_MUNICIPALES_CS.xlsx")
+```
+
+```{r READ ALL RADICAL RIGHT MUNICIPAL CANDIDATES}
+radical_right_candidates <- bind_rows(radical_right_candidates,
+    read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "04 Municipales"),
+  read_excel("CANDIDATOS_PARTIDOS_HISTORICOS.xlsx", sheet = "05 Cabildos insulares")
+) |>
+  mutate(person_id = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+```
+
+```{r JOIN GENERAL/AUTONOMICAL ELECTIONS AND AUTONOMICAL}
+pp_candidates <-
+  bind_rows(pp_candidates, municipal_pp)
+
+vox_candidates <-
+  bind_rows(vox_candidates, municipal_vox)
+
+cs_candidates <-
+  bind_rows(cs_candidates, municipal_cs)
+
+```
+
+```{r NORMALIZE NAMES AND ELECTION DATE}
+vox_candidates <- vox_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+pp_candidates <- pp_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+cs_candidates <- cs_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+radical_right_candidates <- radical_right_candidates |>
+  mutate(
+    # crude person id: uppercase, no accents, no punctuation
+    person_id = candidate |>
+      str_to_upper() |>
+      stringi::stri_trans_general("Latin-ASCII") |>
+      str_remove_all("[^A-Z ]") |>
+      str_squish()
+    # Date?
+  ) 
+
+```
+
+QUITAR ESTO PARA QUE YA ESTÉ ASI EN TODOS.
+
+```{r ABBREVIATIONS OF RADICAL RIGHT PARTIES}
+# one abbreviation per party (the printed ones vary: "DN", "D.N.", ...)
+party_abbreviations <- tribble(
+  ~party,                              ~prev_party,
+  "ADN (coalicion 2019)",              "ADÑ",
+  "Agrupacion Ruiz-Mateos",            "ARM",
+  "Alianza Nacional",                  "AN",
+  "Alternativa de Govern",             "AG",
+  "Alternativa Democrata Nacional",    "ADN",
+  "Alternativa Espanola",              "AES",
+  "Centro Democratico y Social",       "CDS",
+  "Comunion Tradicionalista Carlista", "CTC",
+  "Democracia Nacional",               "DN",
+  "Espana 2000",                       "E2000",
+  "FE de las JONS",                    "FE-JONS",
+  "Falange 2000",                      "FE-2000",
+  "Falange Autentica",                 "FA",
+  "Frente Nacional (2006)",            "FN",
+  "Fuerza Nueva",                      "FN",
+  "Grupo Independiente Liberal",       "GIL",
+  "Hacer Nacion",                      "HN",
+  "Juntas Espanolas",                  "JJEE",
+  "La Falange",                        "LF",
+  "Movimiento Social Republicano",     "MSR",
+  "Nosotros",                          "NOSOTROS",
+  "PADE",                              "PADE",
+  "Partido por la Libertad",           "PxL",
+  "Plataforma per Catalunya",          "PxC",
+  "Sociedad Civil y Democracia",       "SCD",
+  "Som Identitaris",                   "SOMI",
+  "Union del Pueblo Navarro",          "UPN",
+  "Via Democratica",                   "VD"
+)
+```
+
+
+## Vox's Satellite organizations 
+
+```{r VOX'S SATELLITE ORGANIZATION MEMBERS}
+
+pages <- tribble(
+  ~organisation, ~prefix,
+  "DENAES",      "denaes.es/quienes-somos",
+  "Disenso",     "fundaciondisenso.org/nosotros",
+  "ISSEP",       "issep.es/nosotros",
+  "ISSEP",       "issep.es/profesores",
+  "HazteOir",    "hazteoir.org/conocenos",
+  "HazteOir",    "www.hazteoir.org/conocenos",
+  "CitizenGO",   "citizengo.org/es/conocenos",
+  "CitizenGO",   "www.citizengo.org/es/conocenos",
+  "CitizenGO",   "citizengo.org/en/about-us",
+  "Solidaridad", "sindicatosolidaridad.es/contacto"
+)
+
+# --- 1. what the Archive has --------------------------------------------------
+captures <- pages |>
+  mutate(cdx = map(prefix, \(p)
+    request("http://web.archive.org/cdx/search/cdx") |>
+      req_url_query(url = p, matchType = "prefix", output = "json",
+                    fl = "timestamp,original", collapse = "digest",
+                    filter = c("statuscode:200", "mimetype:text/html"),
+                    limit = 2000, .multi = "explode") |>
+      req_retry(max_tries = 3) |>
+      req_perform() |> resp_body_json() |>
+      (\(x) tibble(timestamp = map_chr(x[-1], 1), original = map_chr(x[-1], 2)))())) |>
+  unnest(cdx) |>
+  mutate(date = ymd(str_sub(timestamp, 1, 8)), year = year(date),
+         snapshot = str_c("https://web.archive.org/web/", timestamp, "id_/", original)) |>
+  # one capture per page and year is enough to follow who is on a board
+  slice_max(date, n = 1, by = c(original, year), with_ties = FALSE)
+
+# --- 2. download them in parallel ---------------------------------------------
+responses <- captures$snapshot |>
+  map(\(u) request(u) |> req_timeout(30) |> req_error(is_error = \(r) FALSE)) |>
+  req_perform_parallel(max_active = 5, on_error = "continue", progress = TRUE)
+
+lines <- captures |>
+  mutate(html = map_chr(responses, possibly(\(r) resp_body_string(r), NA_character_))) |>
+  filter(!is.na(html)) |>
+  # only the code is dropped. These sites wrap their content in <header> and
+  # <aside>, so removing those takes the board away with the menu; the census
+  # test below is what actually separates people from navigation.
+  mutate(text = map(html, \(h) {
+    page <- read_html(h)
+    page |> html_elements("script, style, noscript") |> xml2::xml_remove()
+    page |> html_elements("body") |> html_text2() |> str_split_1("\n") |> str_squish()
+  }), .keep = "unused") |>
+  unnest(text) |>
+  filter(text != "")
+
+# --- 3. which of those lines is a person --------------------------------------
+PARTICLES <- c("de", "del", "la", "las", "los", "y", "e", "da", "do", "van", "von", "i")
+
+# labels, menus and headlines the capitalisation rule would otherwise accept
+NOT_A_PERSON <- str_c(
+  "EQUIPO|CONSEJO|PATRONATO|DIRECCION|COMITE|JUNTA|FUNDACION|INSTITUTO|SINDICATO|",
+  "ASOCIACION|UNIVERSIT|SCIENCES PO|COLLEGE|SCHOOL|REVISTA|DIARIO|DIGEST|OBJECTIVE|",
+  "TELEVISION|NEWSLETTER|GACETA|BLOG|ESCUELA|CENTRO|OBSERVATORIO|PREMIO|PROGRAMA|",
+  "CURSO|JORNADA|CONGRESO|ESPANA|NACIONAL|INTERNACIONAL|MOVIMIENTO|INICIO|CONTACTO|",
+  "PRENSA|AGENDA|BOLETIN|TIENDA|AVISO|LEGAL|PRIVACIDAD|COOKIES|DISCURSO|ENTREVISTA|",
+  "ARTICULO|CONFERENCIA|PONENCIA|VIDEO|FOUNDATION|CAMPAIGN|MANAGER|IP ADDRESS|",
+  "SOBRE NOSOTROS|^LEER|^VER |^FISCAL|ENGLISH|ESPANOL|FRANCAIS|DEUTSCH|",
+  "ISSEP|DISENSO|CITIZENGO|HAZTEOIR|DENAES")
+
+# what may follow a name and be kept. The column is "role or description" on
+# purpose: these sites print a post ("Presidente") and a profession
+# ("Filosofo", "Pediatra") in exactly the same place
+ROLES <- str_c(
+  "PRESIDENT|VICEPRESIDENT|DIRECTOR|SECRETARI|TESORER|VOCAL|PATRON|COORDINADOR|",
+  "RESPONSABLE|GERENTE|PORTAVOZ|FUNDADOR|MIEMBRO|ASESOR|PROFESOR|CATEDRATIC|",
+  "DOCENTE|INVESTIGADOR|ANALISTA|CONSEJER|DELEGAD|ESCRITOR|PERIODISTA|FILOSOF|",
+  "HISTORIADOR|ABOGAD|ECONOMISTA|MILITAR|EMPRESARI|MAGISTRAD|SOCIOLOG|POLITOLOG|",
+  "JURISTA|DECANO|RECTOR|EDITOR|COLUMNISTA|DIPUTAD|SENADOR|EURODIPUTAD")
+
+flat <- function(x) str_to_upper(stringi::stri_trans_general(x, "Latin-ASCII"))
+
+# The real test of whether a line is a person: the INE census lists, which the
+# project already uses to assign sex to candidates. A word list of things that
+# are NOT names never ends; a list of the names that exist does.
+ine_forenames <- c("Hombres", "Mujeres") |>
+  map(\(s) read_excel("nombres_por_edad_media.xlsx", sheet = s, skip = 5)$Nombre) |>
+  list_c() |> flat() |> str_squish()
+
+# nicknames and rare forenames the census does not carry
+ALSO_PEOPLE <- c("CAKE", "EDMALY")
+
+# 2 to 6 words, all of them capitalised except the particles
+is_person <- function(x) {
+  capitalised <- map_lgl(str_split(x, " "), \(w) {
+    w <- w[!str_to_lower(flat(w)) %in% PARTICLES]
+    length(w) >= 2 && all(str_detect(w, "^\\p{Lu}\\p{L}"))
+  })
+  str_length(x) >= 5 & str_length(x) <= 60 &
+    str_count(x, "\\S+") >= 2 & str_count(x, "\\S+") <= 6 &
+    !str_detect(x, "[0-9@#/|]") & capitalised &
+    flat(word(x, 1)) %in% c(ine_forenames, ALSO_PEOPLE) &
+    !str_detect(flat(x), NOT_A_PERSON) & !str_detect(flat(x), ROLES)
+}
+
+people <- lines |>
+  # "Ignacio Arsuaga Rato, Presidente" is a person and their role on one line;
+  # without splitting it, the line is thrown away for containing "Presidente"
+  separate_wider_delim(text, ", ", names = c("person", "inline_role"),
+                       too_many = "merge", too_few = "align_start") |>
+  mutate(inline_role = replace_na(inline_role, ""),
+         # the other layout puts the role on the line below the name
+         next_line = lead(person), .by = c(organisation, original, timestamp)) |>
+  filter(is_person(person)) |>
+  mutate(role = case_when(
+           str_detect(flat(inline_role), ROLES) ~ inline_role,
+           str_detect(flat(next_line), ROLES) & str_length(next_line) <= 90 ~ next_line,
+           .default = ""),
+         # Disenso prints the same board in caps on one page and in title case
+         # on another: "AMANDO DE MIGUEL" and "Amando de Miguel" are one person
+         person = if_else(person == str_to_upper(person), str_to_title(person), person),
+         person = str_replace_all(person, str_c("(?<= )(", str_c(str_to_title(PARTICLES),
+                                                                 collapse = "|"), ")(?= )"),
+                                  str_to_lower))
+
+# the same person is listed with and without the second surname ("Ana Velasco",
+# "Ana Velasco Vidal-Abarca"): the longest form wins
+variants <- people |>
+  distinct(person) |>
+  # compound surnames are opened at the hyphen, so that "Alejo Vidal Quadras"
+  # falls inside "Alejo Vidal-Quadras Roca"
+  mutate(tokens = str_split(flat(person), "[ -]"), first = map_chr(tokens, 1))
+
+people <- variants |>
+  rename(long = person, long_tokens = tokens) |>
+  inner_join(rename(variants, short = person, short_tokens = tokens), by = "first",
+             relationship = "many-to-many") |>
+  filter(map2_lgl(short_tokens, long_tokens, \(s, l) all(s %in% l)),
+         lengths(short_tokens) <= lengths(long_tokens)) |>
+  slice_max(lengths(long_tokens), n = 1, by = short, with_ties = FALSE) |>
+  select(person = short, canonical = long) |>
+  right_join(people, by = "person") |>
+  mutate(person = coalesce(canonical, person)) |>
+  summarise(.by = c(organisation, person),
+            roles      = str_c(sort(unique(role[role != ""])), collapse = " | "),
+            first_seen = min(date),
+            last_seen  = max(date),
+            n_captures = n_distinct(timestamp),
+            source     = first(str_c("https://web.archive.org/web/", timestamp, "/", original))) |>
+  arrange(organisation, person)
+
+# --- 4. Solidaridad, from the BOE ---------------------------------------------
+# The union's website archives no team page, so its officers are taken from the
+# four announcements of the deposit of its statutes (Direccion General de
+# Trabajo, union SPDSTE, deposit number 99105954). Searched at boe.es for
+# SPDSTE in the title. Rafael Martinez de la Gandara, who signs all four, is
+# the civil servant issuing the resolution and is NOT part of the union.
+solidaridad_boe <- tribble(
+  ~person,                              ~roles,             ~date,        ~boe,
+  "Santiago Alarcón Gordon",            "Solicitante del depósito", "2020-08-12", "BOE-B-2020-26040",
+  "Paula Bernardina Hidalgo de la Cruz","Promotora",        "2020-08-12", "BOE-B-2020-26040",
+  "Raquel Moreno Barba",                "Promotora",        "2020-08-12", "BOE-B-2020-26040",
+  "Ángel García Ochoa",                 "Promotor",         "2020-08-12", "BOE-B-2020-26040",
+  "Santiago Alarcón Gordon",            "Solicitante del depósito", "2021-02-15", "BOE-B-2021-7089",
+  "Rodrigo Alonso Fernández",           "Secretario General", "2021-02-15", "BOE-B-2021-7089",
+  "Javier Tomás de la Cruz Bazo",       "Solicitante del depósito", "2025-05-23", "BOE-B-2025-18656",
+  "Jordi Albert de la Fuente Miró",     "Secretario General", "2025-05-23", "BOE-B-2025-18656",
+  "Javier Tomás de la Cruz Bazo",       "Solicitante del depósito", "2026-07-03", "BOE-B-2026-22639",
+  "Jordi Albert de la Fuente Miró",     "Secretario General", "2026-07-03", "BOE-B-2026-22639"
+) |>
+  summarise(.by = person,
+            organisation = "Solidaridad",
+            roles      = str_c(sort(unique(roles)), collapse = " | "),
+            first_seen = min(ymd(date)),
+            last_seen  = max(ymd(date)),
+            n_captures = n(),
+            source     = str_c("https://www.boe.es/diario_boe/txt.php?id=", first(boe)))
+
+people <- 
+  bind_rows(people, solidaridad_boe) |> 
+  arrange(organisation, person) |> 
+   mutate(person = person |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |> 
+  filter(!person %in% c("ADOLFO SUAREZ", "YA SOMOS", "SEGUNDO APELLIDO"))
+
+# --- 5. other organisations found in the press and Wikipedia ------------------
+# organisations the candidates within the expected seats belonged to before
+# (or besides) Vox: federations, foundations, associations, platforms
+press_organisations <- read_excel("ORGANIZACIONES_CANDIDATOS_VOX.xlsx") |>
+  select(person = PERSON_ID, organisation = ORGANIZACION, roles = ROL, source = FUENTE)
+
+people <- people |>
+  bind_rows(press_organisations) |>
+  arrange(organisation, person)
+
+# --- 6. Revuelta and Homo Legens, from the press ------------------------------
+# Revuelta: youth association launched in October 2023 by five Vox affiliates and
+# party employees, who formed its board; the board is the one reported when two of
+# them took the association to the prosecutor over the DANA donations.
+# Homo Legens: publishing house of the Intereconomia group, founded in 2017 by the
+# former PP deputy Julio Ariza and run by his son Gabriel; it publishes the books of
+# Vox leaders and has employed Lidia Bedman, Santiago Abascal's wife, since 2019
+REVUELTA_SOURCE    <- "https://www.eldebate.com/espana/20251211/revuelta-asociacion-juvenil-denunciado-vox-claves-polemica_364072.html"
+HOMO_LEGENS_SOURCE <- "https://es.wikipedia.org/wiki/Homo_Legens"
+
+press_satellites <- tribble(
+  ~person,                      ~organisation, ~roles,
+  "Jaime Hernández Zúñiga",     "Revuelta",    "Presidente",
+  "Arturo Villarroya González", "Revuelta",    "Vicepresidente",
+  "Pablo González Gasca",       "Revuelta",    "Secretario",
+  "Javier Esteban Bejarano",    "Revuelta",    "Vocal",
+  "Santiago Aneiros",           "Revuelta",    "Vocal | Tesorero de facto",
+  "Julio Ariza",                "Homo Legens", "Fundador",
+  "Gabriel Ariza",              "Homo Legens", "Director",
+  "Kiko Méndez-Monasterio",     "Homo Legens", "Figura clave de la editorial",
+  "Lidia Bedman",               "Homo Legens", "Asesora de redes sociales (desde 2019)"
+) |>
+  mutate(source = if_else(organisation == "Revuelta", REVUELTA_SOURCE, HOMO_LEGENS_SOURCE),
+         person = person |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+people <- people |>
+  bind_rows(press_satellites) |>
+  arrange(organisation, person)
+```
+
+
+```{r TABLE OF VOX'S SATELLITE ORGANIZATIONS}
+# the organisations around Vox whose members were collected above, with how many of
+# them could be identified and how many of those have stood on a Vox list. The
+# organisations of step 5 (federations, foundations, associations the candidates
+# belonged to before Vox) are not satellites and stay out of the table
+satellite_organisations <- tribble(
+  ~organisation, ~type,                     ~founded, ~link_with_vox,
+  "DENAES",      "Foundation",              2006,     "Founded and chaired by Santiago Abascal before Vox",
+  "HazteOir",    "Association (lobby)",     2001,     "Ultra-Catholic lobby, ally of Vox",
+  "CitizenGO",   "Online platform",         2013,     "International platform of HazteOir",
+  "Homo Legens", "Publishing house",        2017,     "Publisher of Vox leaders (Intereconomia group)",
+  "Disenso",     "Foundation (think tank)", 2020,     "Think tank of Vox, chaired by Santiago Abascal",
+  "ISSEP",       "Training institute",      2020,     "Madrid branch of Marion Marechal's institute; trains Vox cadres",
+  "Solidaridad", "Trade union",             2020,     "Trade union promoted by Vox",
+  "Revuelta",    "Youth association",       2023,     "Launched by Vox affiliates and employees"
+)
+
+satellite_members <- people |>
+  filter(organisation %in% satellite_organisations$organisation) |>
+  summarise(members        = n_distinct(person),
+            vox_candidates = n_distinct(person[person %in% vox_candidates$person_id]),
+            .by = organisation)
+
+satellite_table <- satellite_organisations |>
+  left_join(satellite_members, by = "organisation") |>
+  mutate(across(c(members, vox_candidates), \(x) replace_na(x, 0L))) |>
+  arrange(founded) |>
+  # as text: stargazer prints numbers with a thousands separator ("2,006")
+  mutate(founded = as.character(founded)) |>
+  select(Organisation = organisation, Type = type, Founded = founded, `Link with Vox` = link_with_vox,
+         `Members identified` = members, `Vox candidates` = vox_candidates)
+
+stargazer(as.data.frame(satellite_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox's satellite organisations",
+          notes = c("Members identified: board members and staff found in the archived websites (Wayback Machine),",
+                    "the BOE (Solidaridad) and the press (Revuelta, Homo Legens). Vox candidates: members who stood on a Vox list."))
+
+# who they are
+people |>
+  filter(organisation %in% satellite_organisations$organisation,
+         person %in% vox_candidates$person_id) |>
+  distinct(organisation, person, roles) |>
+  arrange(organisation, person) |>
+  print(n = Inf)
+```
+
+
+```{r ISSEP}
+
+```
+
+
+```{r CLEAN HTML IN CANDIDATE NAMES}
+# some names come with the markup of the page they were scraped from:
+# "Aitor&nbsp;<span class="searchMatch">Caneda</span>&nbsp;Manso". The markup is
+# read as HTML (tags dropped, entities decoded) and person_id is built again
+vox_candidates <- vox_candidates |>
+  mutate(candidate = map_chr(candidate, \(x)
+           if (!is.na(x) && str_detect(x, "[<&]")) xml2::xml_text(xml2::read_html(str_c("<p>", x, "</p>"))) else x) |>
+           str_squish(),
+         person_id = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+# must return 0 rows
+vox_candidates |> filter(str_detect(candidate, "[<>&;]"))
+```
+
+
+## Data Enrichment
+
+```{r HARMONIZE SEX}
+# every source writes sex its own way ("M"/"F", "Hombre"/"Mujer", "Male"/"Female")
+# and the municipal lists do not carry it at all. Harmonised to Female/Male, and
+# filled, in this order: 1. what the list says, 2. what the other lists of the same
+# person say, 3. the forename, with the INE census of names
+
+# 1. the forenames of the INE census, each with the sex of most of its holders
+ine_forenames_sex <- bind_rows(
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Hombres", skip = 5) |> mutate(sex_forename = "Male"),
+  read_excel("nombres_por_edad_media.xlsx", sheet = "Mujeres", skip = 5) |> mutate(sex_forename = "Female")) |>
+  mutate(forename = Nombre |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  filter(!is.na(forename)) |>
+  slice_max(Frecuencia, n = 1, by = forename, with_ties = FALSE) |>
+  select(forename, sex_forename, frequency = Frecuencia) |>
+  arrange(desc(frequency))
+
+# 2. what each list says, harmonised ("MUJER" is checked before the "M" of Male)
+vox_candidates <- vox_candidates |>
+  mutate(sex = case_when(str_detect(str_to_upper(sex), "^(F|MUJER|FEMALE|FEMENINO)") ~ "Female",
+                         str_detect(str_to_upper(sex), "^(M|H|MALE|HOMBRE|MASCULINO|VARON)") ~ "Male"))
+
+# 3. the sex the person has in their other lists
+sex_by_person <- vox_candidates |>
+  filter(!is.na(sex)) |>
+  count(person_id, sex) |>
+  slice_max(n, n = 1, by = person_id, with_ties = FALSE) |>
+  select(person_id, sex_person = sex)
+
+# 4. the sex of the forename, trying in this order:
+#    a. the first two words ("MARIA JOSE", "JOSE MARIA"); "M"/"MA" stand for Maria
+#    b. the first word
+#    c. forenames written together ("JUANCARLOS", "MARIAJESUS"): the longest census
+#       forename the first word starts with
+#    d. the second forename, skipping particles ("LEONIA ALEXANDRA", "J DEL ROCIO")
+#    e. foreign or rare forenames the census does not carry, set by hand below
+#    f. a misspelt first word ("PACUAL", "MAGADALENA"): the census forename one letter apart
+#    g. what is left: ending in -A, Female; otherwise, Male
+census_forenames <- ine_forenames_sex |>
+  filter(frequency >= 100, !str_detect(forename, " "))
+
+forename_corrections <- tribble(
+  ~first_one,     ~sex_e,
+  "ANABEIDY",     "Female", "ANATERESA",  "Female", "ANAVANESA",  "Female", "AHIATIMA",   "Female",
+  "AUVELLY",      "Female", "CARUCHA",    "Female", "DOBROSLAVA", "Female", "EMERENCIA",  "Female",
+  "EUDIVIGIS",    "Female", "EUKARIS",    "Female", "FAITIA",     "Female", "GLISELIA",   "Female",
+  "IBOLYAKINGA",  "Female", "ISOLGITA",   "Female", "LUCIVANIA",  "Female", "MAGACEDA",   "Female",
+  "MALLAURY",     "Female", "MARIUXI",    "Female", "MERCHINES",  "Female", "MISSANDRA",  "Female",
+  "NAOULA",       "Female", "OSDANAY",    "Female", "OSLAIDA",    "Female", "SLADANA",    "Female",
+  "VALBONA",      "Female", "YULEISIS",   "Female", "IDERMIS",    "Female", "ENERIET",    "Female",
+  "ARGYRIS",      "Male",   "BEDROS",     "Male",   "CANCIANO",   "Male",   "CESIDIO",    "Male",
+  "GARBEIL",      "Male",   "HARTIOUN",   "Male",   "KEFAH",      "Male",   "OLIVEIRO",   "Male",
+  "SANTE",        "Male",   "SIQUEM",     "Male",   "TRAJANO",    "Male",   "TROYANO",    "Male",
+  "VANGELIS",     "Male",   "AMROU",      "Male"
+)
+
+sex_by_forename <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(name      = str_replace(person_id, "^MA? ", "MARIA "),
+         first_two = word(name, 1, 2),
+         first_one = word(name, 1),
+         second    = word(str_squish(str_remove_all(name, "\\b(DE|DEL|LA|LAS|LOS)\\b")), 2)) |>
+  left_join(ine_forenames_sex |> select(first_two = forename, sex_a = sex_forename), by = "first_two") |>
+  left_join(ine_forenames_sex |> select(first_one = forename, sex_b = sex_forename), by = "first_one") |>
+  left_join(ine_forenames_sex |> select(second = forename, sex_d = sex_forename), by = "second")
+
+written_together <- sex_by_forename |>
+  filter(is.na(sex_a), is.na(sex_b)) |>
+  distinct(first_one) |>
+  cross_join(census_forenames |> filter(str_length(forename) >= 4) |> select(forename, sex_forename)) |>
+  filter(str_starts(first_one, forename), first_one != forename) |>
+  slice_max(str_length(forename), n = 1, by = first_one, with_ties = FALSE) |>
+  select(first_one, sex_c = sex_forename)
+
+misspelt <- sex_by_forename |>
+  filter(is.na(sex_a), is.na(sex_b), is.na(sex_d)) |>
+  distinct(first_one)
+
+distances <- adist(misspelt$first_one, census_forenames$forename)
+
+misspelt <- misspelt |>
+  mutate(closest  = census_forenames$forename[apply(distances, 1, which.min)],
+         distance = apply(distances, 1, min),
+         sex_f    = if_else(distance == 1, census_forenames$sex_forename[apply(distances, 1, which.min)], NA))
+
+sex_by_forename <- sex_by_forename |>
+  left_join(written_together, by = "first_one") |>
+  left_join(misspelt |> select(first_one, closest, sex_f), by = "first_one") |>
+  left_join(forename_corrections, by = "first_one") |>
+  mutate(sex_g    = if_else(str_ends(first_one, "A"), "Female", "Male"),
+         sex_name = coalesce(sex_a, sex_b, sex_c, sex_d, sex_e, sex_f, sex_g),
+         sex_rule = case_when(!is.na(sex_a) ~ "a", !is.na(sex_b) ~ "b", !is.na(sex_c) ~ "c",
+                              !is.na(sex_d) ~ "d", !is.na(sex_e) ~ "e", !is.na(sex_f) ~ "f", TRUE ~ "g"))
+
+# names resolved by the weaker rules (f, g): check them
+sex_by_forename |> filter(sex_rule %in% c("f", "g")) |> select(person_id, closest, sex_name, sex_rule) |> print(n = Inf)
+
+sex_by_forename <- sex_by_forename |>
+  select(person_id, sex_name)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("sex_person", "sex_name"))) |>
+  left_join(sex_by_person, by = "person_id") |>
+  left_join(sex_by_forename, by = "person_id") |>
+  mutate(sex = coalesce(sex, sex_person, sex_name)) |>
+  select(-sex_person, -sex_name)
+
+count(vox_candidates, sex)
+
+# names still without sex: must return 0 rows
+vox_candidates |> filter(is.na(sex)) |> distinct(person_id)
+```
+
+```{r SIGNEES AND FOUNDERS}
+# is_signee: signed the manifesto of reconversion.es; is_founder: in the founders table.
+# As with the party organs, a name is found when its words are in the candidate's
+# name; when it fits several candidates, the rule below picks one or leaves it out
+reference_names <- bind_rows(
+  signees_reconversion |> mutate(group = "signee"),
+  founders |> select(name) |> mutate(group = "founder")) |>
+  mutate(name_id = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  distinct(group, name_id)
+
+reference_words <- reference_names |>
+  distinct(name_id) |>
+  mutate(word = name_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct() |>
+  add_count(name_id, name = "n_words")
+
+candidate_words <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+# Vox elections and national or regional lists of each candidate, to break ties
+candidate_record <- vox_candidates |>
+  group_by(person_id) |>
+  summarise(n_elections       = n_distinct(election),
+            national_regional = any(level != "Municipal"),
+            .groups = "drop")
+
+reference_matches <- reference_words |>
+  filter(n_words >= 2) |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  count(name_id, person_id, n_words, name = "words_found") |>
+  filter(words_found == n_words,
+         # the words in the same order and together, except a middle name after the
+         # first one: "Pedro Fernandez Barbadillo" is "Pedro Maria Fernandez Barbadillo",
+         # but "Enrique Alvarez Lopez" is not "Enrique Lopez Alvarez" and
+         # "Jose Maria Alvarez" is not "Jose Maria Figaredo Alvarez Sala"
+         str_detect(person_id, str_c("\\b", word(name_id, 1), "\\b(.* )?", word(name_id, 2, -1), "\\b"))) |>
+  left_join(candidate_record, by = "person_id") |>
+  add_count(name_id, name = "n_candidates")
+
+# names that fit several candidates ("Santiago Abascal": Abascal Conde and his father
+# Abascal Escuza): the one who ran in national or regional lists in more elections
+chosen <- reference_matches |>
+  filter(n_candidates == 1 | national_regional) |>
+  slice_max(n_elections, n = 1, by = name_id) |>
+  add_count(name_id, name = "n_chosen") |>
+  filter(n_chosen == 1)
+
+# the same person under a shorter name ("Ana Velasco Vidalabarca" and
+# "Ana Maria Velasco Vidalabarca") is kept as well
+same_person <- reference_matches |>
+  inner_join(chosen |> select(name_id, chosen_id = person_id), by = "name_id") |>
+  filter(person_id != chosen_id,
+         map2_lgl(str_split(person_id, " "), str_split(chosen_id, " "), \(p, c) all(p %in% c)))
+
+# names left out: check them by hand
+reference_matches |> filter(!name_id %in% chosen$name_id) |> arrange(name_id)
+
+matched <- reference_names |>
+  inner_join(bind_rows(chosen, same_person) |> select(name_id, person_id), by = "name_id",
+             relationship = "many-to-many")   # a founder can also be a signee
+
+vox_candidates <- vox_candidates |>
+  mutate(is_signee  = person_id %in% matched$person_id[matched$group == "signee"],
+         is_founder = person_id %in% matched$person_id[matched$group == "founder"])
+```
+
+```{r VOX's POSITIONS IN GOVERNMENT}
+vox_executive_positions <- tribble(
+  ~name,                               ~region,                ~position,                                                                                        ~start_date,  ~end_date,
+  # === Castilla y León I (2022-2024) ===
+  "JUAN GARCÍA-GALLARDO FRINGS",       "Castilla y León",      "Vicepresidente de la Junta de Castilla y León",                                                  "20/04/2022", "11/07/2024",
+  "GONZALO SANTONJA GÓMEZ-AGERO",      "Castilla y León",      "Consejero de Cultura, Turismo y Deporte",                                                        "20/04/2022", "11/07/2024",  # left Vox, stayed in office
+  "GERARDO DUEÑAS MERINO",             "Castilla y León",      "Consejero de Agricultura, Ganadería y Desarrollo Rural",                                         "20/04/2022", "11/07/2024",
+  "MARIANO VEGANZONES DÍEZ",           "Castilla y León",      "Consejero de Industria, Comercio y Empleo",                                                      "20/04/2022", "11/07/2024",
+  # === Comunidad Valenciana (2023-2024) ===
+  "VICENTE BARRERA SIMÓ",              "Comunidad Valenciana", "Vicepresidente Primero y Conseller de Cultura y Deporte",                                        "17/07/2023", "11/07/2024",
+  "ELISA NÚÑEZ SÁNCHEZ",               "Comunidad Valenciana", "Consellera de Justicia e Interior",                                                              "17/07/2023", "11/07/2024",
+  "JOSÉ LUIS AGUIRRE LARRAURI",        "Comunidad Valenciana", "Conseller de Agricultura, Ganadería y Pesca",                                                    "17/07/2023", "11/07/2024",
+  # === Extremadura I (2023-2024) ===
+  "MARÍA DEL CAMINO LIMIA",            "Extremadura",          "Consejera de Gestión Forestal y Mundo Rural",                                                    "20/07/2023", "05/10/2023",
+  "IGNACIO HIGUERO DE JUAN",           "Extremadura",          "Consejero de Gestión Forestal y Mundo Rural",                                                    "05/10/2023", "11/07/2024",  # left Vox, stayed in office
+  # === Aragón I (2023-2024) ===
+  "ALEJANDRO NOLASCO ASENSIO",         "Aragón",               "Vicepresidente Primero y Consejero de Desarrollo Territorial, Despoblación y Justicia",          "12/08/2023", "12/07/2024",
+  "ÁNGEL SAMPER SECORÚN",              "Aragón",               "Consejero de Agricultura, Ganadería y Alimentación",                                             "12/08/2023", "12/07/2024",
+  # === Región de Murcia (2023-2024) ===
+  "JOSÉ ÁNGEL ANTELO PAREDES",         "Región de Murcia",     "Vicepresidente y Consejero de Interior, Emergencias y Ordenación del Territorio",                "15/09/2023", "12/07/2024",
+  "JOSÉ MANUEL PANCORBO DE LA TORRE",  "Región de Murcia",     "Consejero de Fomento e Infraestructuras",                                                        "15/09/2023", "12/07/2024",
+  # === Extremadura II (2026-) ===
+  "ÓSCAR ARTURO FERNÁNDEZ CALLE",      "Extremadura",          "Vicepresidente y Consejero de Desregulación, Servicios Sociales y Familia",                      "30/04/2026", NA,
+  "JUAN JOSÉ GARCÍA LOBATO",           "Extremadura",          "Consejero de Agricultura, Ganadería y Medio Natural",                                            "30/04/2026", NA,
+  # === Aragón II (2026-) ===
+  "ALEJANDRO NOLASCO ASENSIO",         "Aragón",               "Vicepresidente Primero y Consejero de Desregulación, Bienestar Social y Familia",                "04/05/2026", NA,
+  "ARÁNZAZU SIMÓN PÉREZ",              "Aragón",               "Consejera de Agricultura, Ganadería y Alimentación",                                             "04/05/2026", NA,
+  "LUIS FRANCISCO BIENDICHO GRACIA",   "Aragón",               "Consejero de Medio Ambiente y Turismo",                                                          "04/05/2026", NA,
+  # === Castilla y León II (2026-) ===
+  "CARLOS POLLÁN FERNÁNDEZ",           "Castilla y León",      "Vicepresidente Primero y Consejero de Desregulación, Familia y Ayudas Sociales",                 "15/06/2026", NA,
+  "JOAQUÍN ANTONIO PINO",              "Castilla y León",      "Consejero de Agricultura, Ganadería, Medio Rural y Política Ambiental",                          "15/06/2026", NA,
+  "JOSÉ ALBERTO DÍAZ PICO",            "Castilla y León",      "Consejero de Cultura, Turismo y Deporte",                                                        "15/06/2026", NA,
+  # === Andalucía (2026-) ===
+  "MANUEL GAVIRA FLORENTINO",          "Andalucía",            "Vicepresidente Segundo y Consejero de Turismo, Justicia, Desregulación y Administración Local",  "10/07/2026", NA
+) |>
+  # same format as person_id in vox_candidates: no accents, no punctuation
+  mutate(name = name |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+# the regional election after which each government was formed
+vox_executive_positions <- vox_executive_positions |>
+  mutate(election = case_when(
+    region == "Castilla y León"      & str_ends(start_date, "2022") ~ "autonomous_2022_02",
+    region == "Castilla y León"      & str_ends(start_date, "2026") ~ "autonomous_2026_03",
+    region == "Aragón"               & str_ends(start_date, "2023") ~ "autonomous_2023_05",
+    region == "Aragón"               & str_ends(start_date, "2026") ~ "autonomous_2026_02",
+    region == "Extremadura"          & str_ends(start_date, "2023") ~ "autonomous_2023_05",
+    region == "Extremadura"          & str_ends(start_date, "2026") ~ "autonomous_2025_12",
+    region == "Comunidad Valenciana"                                ~ "autonomous_2023_05",
+    region == "Región de Murcia"                                    ~ "autonomous_2023_05",
+    region == "Andalucía"                                           ~ "autonomous_2026_05"))
+
+# one row per person and election (Limia and Higuero share a post, Nolasco repeats)
+executive_by_candidate <- vox_executive_positions |>
+  group_by(person_id = name, election) |>
+  summarise(executive_position = str_c(position, collapse = " | "), .groups = "drop")
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("executive_position", "has_executive_position"))) |>
+  left_join(executive_by_candidate, by = c("person_id", "election")) |>
+  mutate(has_executive_position = !is.na(executive_position))
+```
+
+
+```{r VOX CER MEMBERS y NO SE QUE OTRA COSA}
+# one row per organic position, CEN flagged
+vox_positions <- read_excel("VOX_CARGOS_ORGANOS.xlsx", sheet = "01 Personas y cargos") |>
+  mutate(name       = Nombre,
+         position   = Cargo,
+         organ      = Organo,
+         first_seen = ymd(`Primera constancia`),
+         last_seen  = ymd(`Ultima constancia`),
+         in_cen     = str_detect(Organo, "^CEN|^Comite Ejecutivo Nacional"),
+         name_id    = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  select(name, name_id, position, organ, first_seen, last_seen, in_cen)
+
+# the organs give short names ("Alejandro Nolasco"), the lists full ones
+# ("Alejandro Nolasco Asensio"): a name matches a candidate when all its words
+# are in the candidate's name, and only if exactly one candidate fits
+name_words <- vox_positions |>
+  distinct(name_id) |>
+  mutate(word = name_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct() |>
+  add_count(name_id, name = "n_words")
+
+candidate_words <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+name_matches <- name_words |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  count(name_id, person_id, n_words, name = "words_found") |>
+  filter(words_found == n_words) |>
+  add_count(name_id, name = "n_candidates")
+
+# names that fit several candidates: left out, check them by hand
+name_matches |> filter(n_candidates > 1) |> arrange(name_id)
+
+# last capture of the VOX website: whoever still appears then is still in the CEN
+last_capture <- ymd("2026-09-06")
+
+organ_info <- vox_positions |>
+  inner_join(name_matches |> filter(n_candidates == 1) |> select(name_id, person_id), by = "name_id") |>
+  group_by(person_id) |>
+  summarise(organic_positions = str_c(unique(position), collapse = " | "),
+            organ_first_seen  = first(sort(first_seen)),
+            organ_last_seen   = last(sort(last_seen)),
+            cen_from          = first(sort(first_seen[in_cen])),
+            cen_to            = last(sort(last_seen[in_cen])),
+            .groups = "drop") |>
+  mutate(cen_to = if_else(cen_to == last_capture, NA, cen_to))   # NA = still in the CEN
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("organic_positions", "organ_first_seen", "organ_last_seen", "in_cen", "cen_from", "cen_to",
+                   "has_organic_position", "in_cen_at_election", "in_cen_before"))) |>
+  left_join(organ_info, by = "person_id") |>
+  mutate(has_organic_position = !is.na(organic_positions),
+         # was in the CEN before this election (election month taken as its date)
+         in_cen_before        = coalesce(cen_from < ym(str_extract(election, "[0-9]{4}_[0-9]{2}")), FALSE))
+```
+LIMPIAR y arreglar CEN
+
+```{r SEATS ACTUALLY WON}
+# seats Vox won in each list: one list = election + chamber + constituency
+# (chamber keeps Congress and Senate apart; in municipal lists chamber is the municipality)
+seats_won <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  group_by(election, chamber, province) |>
+  summarise(seats_won = sum(is_elected %in% TRUE), .groups = "drop")
+
+# did the number 1 of this same list (same chamber and constituency) win a seat
+# in the previous election of that type? Whoever it was: not matched by name
+previous_head_won <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA), list_position == 1) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  group_by(chamber, province, date) |>
+  summarise(head_won = any(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(chamber, province, date) |>
+  group_by(chamber, province) |>
+  mutate(previous_head_won = lag(head_won, default = FALSE)) |>
+  ungroup() |>
+  select(chamber, province, date, previous_head_won)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("seats_won", "top_won"))) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  left_join(seats_won,         by = c("election", "chamber", "province")) |>
+  left_join(previous_head_won, by = c("chamber", "province", "date")) |>
+  # top_won: heads this list, and the head of this list won a seat last time
+  mutate(top_won = is_titular %in% c(TRUE, NA) & list_position == 1 & previous_head_won %in% TRUE) |>
+  select(-previous_head_won)
+```
+
+```{r VOX EXPECTED SEATS + TOP CANDIDATES}
+# ---------------------------------------- 1. CIS estimate for each list (midpoint, rounded up)
+# how the CIS spells the provinces that the lists spell differently
+same_place <- c("ILLES BALEARS" = "BALEARES",
+                "GIPUZKOA"      = "GUIPUZCOA",
+                "BIZKAIA"       = "VIZCAYA",
+                "ARABA/ALAVA"   = "ALAVA",
+                "S.C. TENERIFE" = "SANTA CRUZ DE TENERIFE",
+                "CIUDAD"        = "CIUDAD REAL")
+
+cis_seats <- read_csv("cis_estimaciones_vox.csv", show_col_types = FALSE) |>
+  mutate(date       = str_extract(election, "[0-9]{4}_[0-9]{2}"),
+         # type of election of each estimate (the CIS does not estimate the Senate)
+         cis_chamber = case_when(str_starts(election, "generales")   ~ "Congress",
+                                 str_starts(election, "europeas")    ~ "European Parliament",
+                                 str_starts(election, "autonomicas") ~ "Autonomical",
+                                 str_starts(election, "municipales") ~ "Municipal"),
+         place      = coalesce(province, circumscription) |>
+                        str_to_upper() |>
+                        stringi::stri_trans_general("Latin-ASCII"),
+         cis_seats  = ceiling((min_seats + max_seats) / 2),
+         # the file also carries rows that are not CIS estimates
+         cis_source = case_when(str_starts(source, "CIS")     ~ "CIS constituency estimate",
+                                str_starts(source, "electos") ~ "previous result, same constituency",
+                                TRUE                          ~ "no CIS estimate before 2018 (0)")) |>
+  add_count(date, cis_chamber, place) |>
+  filter(n == 1) |>                  # two municipalities called Cieza: no way to tell them apart
+  select(date, cis_chamber, place, cis_seats, cis_source)
+
+# ------------------ 2. fallback: seats won in that same list in the previous election
+previous_seats <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  group_by(chamber, province, date) |>
+  summarise(seats_won = sum(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(chamber, province, date) |>
+  group_by(chamber, province) |>
+  mutate(previous_seats = lag(seats_won)) |>          # NA = first time Vox ran this list
+  ungroup() |>
+  select(chamber, province, date, previous_seats)
+
+# ----------------------------------------------- 3. expected seats into the lists
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("expected_seats", "expected_seats_source", "top_expected"))) |>
+  mutate(date        = str_extract(election, "[0-9]{4}_[0-9]{2}"),
+         cis_chamber = case_when(chamber %in% c("Congress", "European Parliament") ~ chamber,
+                                 level %in% c("Autonomical", "Municipal")          ~ level,
+                                 TRUE                                              ~ "Senate"),
+         place       = if_else(level == "Municipal", chamber, province) |>
+                         str_to_upper() |>
+                         stringi::stri_trans_general("Latin-ASCII"),
+         place       = if_else(chamber == "European Parliament", "ESPANA", place),
+         place       = coalesce(same_place[place], place)) |>
+  left_join(cis_seats,      by = c("date", "cis_chamber", "place")) |>
+  left_join(previous_seats, by = c("chamber", "province", "date")) |>
+  mutate(expected_seats        = coalesce(cis_seats, previous_seats, 0),
+         expected_seats_source = case_when(!is.na(cis_seats)      ~ cis_source,
+                                           !is.na(previous_seats) ~ "previous result, same constituency",
+                                           TRUE                   ~ "first contest (0)"),
+         top_expected          = is_titular %in% c(TRUE, NA) & list_position <= expected_seats) |>
+  select(-cis_chamber, -place, -cis_seats, -cis_source, -previous_seats)
+
+# ---------------- 4. did the person win a seat in the election they ran in just before?
+seat_by_date <- vox_candidates |>
+  filter(!is.na(person_id), person_id != "") |>
+  group_by(person_id, date) |>
+  summarise(won_seat = any(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(person_id, date) |>
+  group_by(person_id) |>
+  mutate(had_seat_before = lag(won_seat, default = FALSE)) |>
+  ungroup() |>
+  select(person_id, date, had_seat_before)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of("had_seat_before")) |>
+  left_join(seat_by_date, by = c("person_id", "date")) |>
+  mutate(had_seat_before = coalesce(had_seat_before, FALSE))
+```
+
+```{r ISCO VARIABLES JOIN}
+# occupation before politics (ISCO-08) of the Congress candidates of July 2023 within
+# the electoral threshold, and of the three titulars right below it in each constituency,
+# who are neither heads of list nor above the threshold in that election
+# (ISCO_CANDIDATOS_VOX_2023.xlsx, column GRUPO)
+isco_candidates <- read_excel("ISCO_CANDIDATOS_VOX_2023.xlsx") |>
+  select(person_id          = PERSON_ID,
+         isco08_group       = GRUPO,
+         isco08             = ISCO08,
+         isco08_title       = ISCO08_TITLE,
+         isco08_major       = ISCO08_MAJOR,
+         isco08_major_title = ISCO08_MAJOR_TITLE)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("isco08_group", "isco08", "isco08_title", "isco08_major", "isco08_major_title"))) |>
+  left_join(isco_candidates, by = "person_id")
+```
+
+```{r IN LISTS IN 2013-2017}
+# people who already stood on a Vox list between 2013 and 2017, when Vox had
+# almost no representation
+early_candidates <- vox_candidates |>
+  filter(between(year, 2013, 2017)) |>
+  distinct(person_id)
+
+vox_candidates <- vox_candidates |>
+  mutate(in_lists_2013_2017 = person_id %in% early_candidates$person_id)
+```
+
+
+```{r PREV PARTY VARIABLE}
+# ------------------------------------ 2. every candidacy for another party, with its year
+other_party_candidacies <- bind_rows(
+  pp_candidates |> mutate(prev_party = "PP") |> select(person_id, year, prev_party),
+  cs_candidates |> mutate(prev_party = "Cs") |> select(person_id, year, prev_party),
+  radical_right_candidates |>
+    left_join(party_abbreviations, by = "party") |>
+    select(person_id, year, prev_party)) |>
+  filter(!is.na(person_id), person_id != "") |>
+  mutate(year = as.integer(year),
+         person_id = person_id |>
+           # labels the bulletins print after the name ("IND" for independents, the
+           # party, the section), which stop the same person from matching
+           str_remove(" (CV BOCYLD |TITULARES )?NUM$") |>
+           str_remove(" (IND|JN|AND|UPN|FN|MOVIMENT SOCIAL)$") |>
+           # surnames split at the end of the line in the PDFs: "FERNAND EZ"
+           str_replace("(?<=[A-Z]{3}) (EZ|Z)$", "\\1") |>
+           str_squish()) |>
+  distinct()
+
+# ------------------------------------ 3. parties found in the press (PREV_PARTY_PRENSA_VOX.xlsx):
+# candidates within the expected seats who had been in another party before joining Vox
+press_prev_party <- read_excel("PREV_PARTY_PRENSA_VOX.xlsx") |>
+  select(person_id = PERSON_ID, prev_party = PARTIDO_ANTERIOR) |>
+  separate_longer_delim(prev_party, " | ")
+
+# ------------------- 4. parties the person had been in BEFORE each Vox candidacy
+vox_candidacy_years <- vox_candidates |>
+  distinct(person_id, year)
+
+prev_party_by_year <- bind_rows(
+  # ran for another party in an earlier year
+  vox_candidacy_years |>
+    inner_join(other_party_candidacies, by = "person_id", suffix = c("", "_other"),
+               relationship = "many-to-many") |>
+    filter(year_other < year) |>
+    select(person_id, year, prev_party),
+  # member of another party before joining Vox, according to the press
+  vox_candidacy_years |>
+    inner_join(press_prev_party, by = "person_id", relationship = "many-to-many")) |>
+  group_by(person_id, year) |>
+  summarise(prev_party = str_c(sort(unique(prev_party)), collapse = " | "), .groups = "drop")
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("prev_party", "has_prev_party"))) |>
+  left_join(prev_party_by_year, by = c("person_id", "year")) |>
+    mutate(has_prev_party = if_else(!is.na(prev_party), TRUE, NA))
+```
+
+
+```{r}
+# electable_candidates <- 
+  vox_candidates |>
+  filter(top_expected | top_won) |> 
+  select(chamber, year, province, list_position, candidate, is_elected, expected_seats, top_won, seats_won, prev_party) |> view()
+```
+
+## Electoral Results Vox
+
+```{r TABLE VOX RESULTS}
+# one row per election: general elections keep Congress and Senate apart,
+# regional elections held on the same day are counted together
+vox_results <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(contest = if_else(level == "National", str_c(election, " ", chamber), election)) |>
+  group_by(level, date, contest) |>
+  summarise(lists            = n_distinct(chamber, province),
+            candidates       = n(),
+            seats_won        = sum(is_elected %in% TRUE),
+            lists_with_seats = n_distinct(chamber[is_elected %in% TRUE], province[is_elected %in% TRUE]),
+            expected_seats   = sum(top_expected),
+            .groups = "drop") |>
+  arrange(factor(level, levels = c("National", "Autonomical", "Municipal")), date) |>
+  select(Level = level, Election = contest, Lists = lists, Candidates = candidates,
+         `Expected seats` = expected_seats, `Seats won` = seats_won, `Lists with seats` = lists_with_seats)
+
+stargazer(as.data.frame(vox_results), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox electoral results by election",
+          notes = "Titular candidates only. Expected seats: candidates placed within the expected seats of their list.")
+```
+
+```{r FACETED CARTOGRAM MAP}
+library(mapSpain)
+library(sf)
+library(readxl)
+library(cartogram)
+
+# Vox's vote and its access to regional government in the four phases of the party, on
+# a contiguous cartogram (r-graph-gallery.com/331-basic-cartogram). Each region is
+# resized by its area times Vox's vote share there: the total size of Spain does not
+# change, and a region grows where Vox did better than its own average and shrinks where
+# it did worse. The size compares Vox with itself, not with the other parties
+phases <- tribble(
+  ~phase,       ~phase_start,       ~phase_end,
+  "2014-2017",  ymd("2014-01-01"),  ymd("2017-12-31"),
+  "2018-2019",  ymd("2018-01-01"),  ymd("2019-12-31"),
+  "2020-2022",  ymd("2020-01-01"),  ymd("2022-12-31"),
+  "2023-2026",  ymd("2023-01-01"),  ymd("2026-12-31")
+)
+
+# ---- 1. Vox's vote share by region in the general elections of each phase -------------
+# Congress results by constituency (Ministry of the Interior, infoelectoral, PROV_02 files).
+# There was no general election in 2020-2022: that phase keeps the result of November
+# 2019, the one in force during it
+general_by_phase <- tribble(
+  ~file,                   ~phase,       ~election,
+  "PROV_02_201512_1.zip",  "2014-2017",  "December 2015",
+  "PROV_02_201606_1.zip",  "2014-2017",  "June 2016",
+  "PROV_02_201904_1.zip",  "2018-2019",  "April 2019",
+  "PROV_02_201911_1.zip",  "2018-2019",  "November 2019",
+  "PROV_02_201911_1.zip",  "2020-2022",  "November 2019",
+  "PROV_02_202307_1.zip",  "2023-2026",  "July 2023"
+)
+
+# the party names are in row 2 or 3 of each file and the column labels in row 4; the
+# provinces start in row 5. Where Vox did not run, its votes are empty (0 votes)
+general_results <- tibble(file = unique(general_by_phase$file)) |>
+  mutate(results = map(file, \(f) {
+    raw   <- read_excel(unzip(f, exdir = tempdir()), col_names = FALSE, col_types = "text")
+    vox   <- which(unlist(raw[2, ]) == "VOX" | unlist(raw[3, ]) == "VOX")[1]
+    valid <- which(unlist(raw[4, ]) == "Votos válidos")
+    rows  <- which(str_detect(raw[[2]], "^[0-9]+$"))
+    tibble(cpro        = str_pad(raw[[2]][rows], 2, pad = "0"),
+           vox_votes   = replace_na(as.numeric(raw[[vox]][rows]), 0),
+           valid_votes = as.numeric(raw[[valid]][rows]))
+  })) |>
+  unnest(results)
+
+# 52 constituencies in every file (must return 0 rows)
+general_results |> count(file) |> filter(n != 52)
+
+# provinces added up to regions, and the elections of each phase averaged
+vote_by_phase <- general_by_phase |>
+  left_join(general_results, by = "file", relationship = "many-to-many") |>
+  left_join(esp_codelist |> distinct(cpro, codauto), by = "cpro") |>
+  summarise(vote_share = 100 * sum(vox_votes) / sum(valid_votes), .by = c(phase, election, codauto)) |>
+  summarise(vote_share = mean(vote_share), .by = c(phase, codauto))
+
+# ---- 2. Vox in the regional government, or propping up a PP government --------------
+# a Vox post counts in a phase if it started before the phase ended and ended after it
+# started (posts still held have no end date)
+vox_in_government <- vox_executive_positions |>
+  mutate(start = dmy(start_date), end = coalesce(dmy(end_date), today())) |>
+  left_join(tribble(~region,                 ~codauto,
+                    "Andalucía",             "01",
+                    "Aragón",                "02",
+                    "Castilla y León",       "07",
+                    "Comunidad Valenciana",  "10",
+                    "Extremadura",           "11",
+                    "Región de Murcia",      "14"), by = "region") |>
+  cross_join(phases) |>
+  filter(start <= phase_end, end >= phase_start) |>
+  distinct(codauto, phase)
+
+# PP governments that owed their investiture to the votes of Vox without Vox entering
+# them, in office at some point of the phase
+pp_needs_vox <- tribble(
+  ~codauto, ~phase,       ~investiture,
+  "01",     "2018-2019",  "Juan Manuel Moreno, January 2019 (PP-Cs)",
+  "13",     "2018-2019",  "Isabel Díaz Ayuso, August 2019 (PP-Cs)",
+  "14",     "2018-2019",  "Fernando López Miras, July 2019 (PP-Cs)",
+  "01",     "2020-2022",  "Juan Manuel Moreno, in office until July 2022",
+  "13",     "2020-2022",  "Isabel Díaz Ayuso, in office until 2021 and invested again with Vox votes in June 2021",
+  "14",     "2020-2022",  "Fernando López Miras, in office until 2023",
+  "04",     "2023-2026",  "Marga Prohens, July 2023"
+)
+
+# ---- 3. one contiguous cartogram per phase ----------------------------------------------
+# equal-area projection (the cartogram works with areas); the Canary Islands are moved
+# next to the peninsula before the calculation
+regions <- esp_get_ccaa(epsg = "3035") |>
+  select(codauto) |>
+  mutate(area = as.numeric(st_area(geometry)))
+
+# weight = area x vote share relative to Vox's national share in the phase. A region
+# where Vox did not run keeps 5% of its size (a weight of zero cannot be drawn)
+vox_cartogram <- phases$phase |>
+  map(\(p) regions |>
+        left_join(filter(vote_by_phase, phase == p), by = "codauto") |>
+        mutate(phase    = p,
+               relative = vote_share / weighted.mean(vote_share, area),
+               weight   = area * pmax(relative, 0.05)) |>
+        cartogram_cont("weight", itermax = 15)) |>
+  bind_rows() |>
+  mutate(status = case_when(
+           str_c(codauto, phase) %in% str_c(vox_in_government$codauto, vox_in_government$phase) ~ "Vox in the government",
+           str_c(codauto, phase) %in% str_c(pp_needs_vox$codauto, pp_needs_vox$phase)           ~ "PP government that needed Vox's votes",
+           TRUE                                                                                  ~ "Neither") |>
+           factor(levels = c("Vox in the government", "PP government that needed Vox's votes", "Neither")))
+
+# ---- 4. the map ---------------------------------------------------------------------------
+# national vote share in each phase, for the panel titles
+phase_names <- general_by_phase |>
+  left_join(general_results, by = "file", relationship = "many-to-many") |>
+  summarise(vote_share = 100 * sum(vox_votes) / sum(valid_votes), .by = c(phase, election)) |>
+  summarise(label = str_c(first(phase), "\n", str_c(election, collapse = " and "), ": ",
+                          str_c(format(round(vote_share, 1), nsmall = 1), "%", collapse = " and ")),
+            .by = phase) |>
+  deframe()
+
+ggplot(vox_cartogram) +
+  geom_sf(aes(fill = status), colour = "white", linewidth = 0.2) +
+  scale_fill_manual(values = c("Vox in the government"                 = "#1b7a3d",
+                               "PP government that needed Vox's votes" = "#9fd3ad",
+                               "Neither"                               = "grey70"),
+                    drop = FALSE, name = NULL) +
+  facet_wrap(~ phase, ncol = 2, labeller = as_labeller(phase_names)) +
+  labs(title = "Vox's vote and its access to regional government",
+       subtitle = "Regions resized by Vox's vote there: larger where Vox did better than its own average",
+       caption = str_c("Size: area of the region times Vox's share of the valid vote in the general elections of the phase,\n",
+                       "relative to its national share (a region where Vox did not run keeps 5% of its size).\n",
+                       "Colour: Vox held a post in the regional government, or its votes were needed to invest a PP president,\n",
+                       "at any point of the phase. Source: Ministry of the Interior (infoelectoral). Canary Islands moved next to the peninsula.")) +
+  theme_void() +
+  theme(text = element_text(colour = "#22211d"),
+        plot.background = element_rect(fill = "#f5f5f4", colour = NA),
+        panel.background = element_rect(fill = "#f5f5f4", colour = NA),
+        legend.background = element_rect(fill = "#f5f5f4", colour = NA),
+        plot.title = element_text(size = 16, hjust = 0.5, colour = "#4e4d47"),
+        plot.subtitle = element_text(size = 9, hjust = 0.5, colour = "#4e4d47", margin = margin(b = 8)),
+        plot.caption = element_text(size = 7, hjust = 0, colour = "grey40"),
+        strip.text = element_text(size = 9, margin = margin(b = 4)),
+        legend.position = "bottom",
+        legend.text = element_text(size = 8),
+        plot.margin = margin(10, 10, 10, 10))
+```
+
+```{r MAP COUNCILLERS PRE 2018}
+library(mapSpain)
+library(sf)
+
+# Vox councillors elected in the 2015 municipal elections (Vox's only local seats before 2018)
+councillors_2015 <- vox_candidates |>
+  filter(level == "Municipal", year == 2015, is_elected %in% TRUE) |>
+  count(province, chamber, name = "councillors") |>
+  mutate(muni_key = chamber |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(\(x) str_c(sort(str_squish(x)), collapse = "/")))
+
+municipalities_map <- esp_get_munic(epsg = "3857") |>
+  left_join(provinces, by = c("cpro" = "province_code")) |>
+  mutate(muni_key = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(\(x) str_c(sort(str_squish(x)), collapse = "/")))
+
+councillors_map <- municipalities_map |>
+  inner_join(councillors_2015, by = c("muni_key", "province"))
+
+# councillors whose municipality was not found on the map (must return 0 rows)
+councillors_2015 |> anti_join(st_drop_geometry(councillors_map), by = c("muni_key", "province"))
+
+# one point per municipality, at its centroid
+councillors_centroids <- st_centroid(councillors_map)
+
+councillors_points <- councillors_centroids |>
+  st_drop_geometry() |>
+  bind_cols(as_tibble(st_coordinates(councillors_centroids)))
+
+ggplot() +
+  geom_sf(data = esp_get_prov(epsg = "3857"), fill = "grey95", colour = "grey70", linewidth = 0.2) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), colour = "grey60") +
+  geom_point(data = councillors_points, aes(X, Y, size = councillors), colour = "#009E73") +
+  ggrepel::geom_text_repel(data = councillors_points, aes(X, Y, label = str_c(name, " (", councillors, ")")),
+                           size = 3, min.segment.length = 0) +
+  scale_size_continuous(range = c(2, 5), breaks = 1:3, name = "Councillors") +
+  labs(title = "Vox councillors before 2018",
+       subtitle = "Municipal elections of May 2015") +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r TABLE VOX CANDIDATES BY LEVELS}
+# profile of the candidates at each level (one row per candidacy)
+candidates_by_level <- vox_candidates |>
+  mutate(level = factor(level, levels = c("National", "Autonomical", "Municipal"))) |>
+  group_by(level) |>
+  summarise(`Candidacies`                        = n(),
+            `Different people`                   = n_distinct(person_id),
+            `Elections`                          = n_distinct(election),
+            `Women (%)`                          = round(100 * mean(sex[!is.na(sex)] == "Female"), 1),
+            `Elected (%)`                        = round(100 * mean(is_elected %in% TRUE), 1),
+            `Within expected seats (%)`          = round(100 * mean(top_expected), 1),
+            `Seat in previous election (%)`      = round(100 * mean(had_seat_before), 1),
+            # has_prev_party is TRUE or NA: the NA count as no party on record
+            `Ran for another party before (%)`   = round(100 * mean(has_prev_party %in% TRUE), 1),
+            `In the CEN before the election (%)` = round(100 * mean(in_cen_before), 2),
+            `Organic position in Vox (%)`        = round(100 * mean(has_organic_position), 2),
+            .groups = "drop") |>
+  mutate(level = as.character(level)) |>
+  pivot_longer(-level, names_to = "Variable") |>
+  pivot_wider(names_from = level, values_from = value)
+
+stargazer(as.data.frame(candidates_by_level), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidates by level of election",
+          notes = "One row per candidacy. Sex of municipal candidates inferred from the forename (INE census).")
+
+# the same variables for the candidates within the expected seats and the rest
+candidates_by_expected <- vox_candidates |>
+  mutate(group = if_else(top_expected, "Within expected seats", "Rest of the list")) |>
+  group_by(group) |>
+  summarise(`Candidacies`                        = n(),
+            `Women (%)`                          = round(100 * mean(sex[!is.na(sex)] == "Female"), 1),
+            `Elected (%)`                        = round(100 * mean(is_elected %in% TRUE), 1),
+            `Seat in previous election (%)`      = round(100 * mean(had_seat_before), 1),
+            `Ran for another party before (%)`   = round(100 * mean(has_prev_party %in% TRUE), 1),
+            `In the CEN before the election (%)` = round(100 * mean(in_cen_before), 2),
+            `Mean list position`                 = round(mean(list_position, na.rm = TRUE), 1),
+            .groups = "drop") |>
+  pivot_longer(-group, names_to = "Variable") |>
+  pivot_wider(names_from = group, values_from = value)
+
+stargazer(as.data.frame(candidates_by_expected), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Candidates within and outside the expected seats")
+```
+
+
+```{r MAP VOX GOVERNMENT}
+# regions where Vox has held regional government posts, by coalition period
+government_by_region <- vox_executive_positions |>
+  mutate(period = if_else(str_ends(start_date, "2026"), "2026 onwards", "2022-2024")) |>
+  group_by(region, period) |>
+  summarise(posts = n_distinct(position), .groups = "drop") |>   # Limia and Higuero held the same post
+  mutate(codauto = case_match(region,
+                              "Andalucía"            ~ "01",
+                              "Aragón"               ~ "02",
+                              "Castilla y León"      ~ "07",
+                              "Comunidad Valenciana" ~ "10",
+                              "Extremadura"          ~ "11",
+                              "Región de Murcia"     ~ "14"))
+
+government_map <- esp_get_ccaa(epsg = "3857") |>
+  cross_join(tibble(period = c("2022-2024", "2026 onwards"))) |>
+  left_join(government_by_region, by = c("codauto", "period"))
+
+ggplot(government_map) +
+  geom_sf(aes(fill = posts), colour = "white", linewidth = 0.2) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), colour = "grey60") +
+  scale_fill_gradient(low = "#b7e4c7", high = "#1b7a3d", na.value = "grey90",
+                      breaks = 1:4, name = "Vox posts in\nthe regional government") +
+  facet_wrap(~ period) +
+  labs(title = "Vox in regional governments") +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r TABLE VOX IN REGIONAL GOVERNMENTS}
+# every government post, and whether the person had been a Vox candidate in that election
+executive_table <- vox_executive_positions |>
+  left_join(vox_candidates |> distinct(name = person_id, election) |> mutate(candidate = "Yes"),
+            by = c("name", "election")) |>
+  mutate(candidate = replace_na(candidate, "No"),
+         end_date  = replace_na(end_date, "in office")) |>
+  select(Region = region, Name = name, Position = position, From = start_date, To = end_date,
+         `Vox candidate in that election` = candidate)
+
+stargazer(as.data.frame(executive_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox members of regional governments")
+```
+
+
+```{r TABLE PREVIOUS PARTY OF VOX CANDIDATES}
+# candidacies by the parties the person had run for before (a candidacy can count for several)
+previous_party_table <- vox_candidates |>
+  filter(has_prev_party) |>
+  separate_longer_delim(prev_party, " | ") |>
+  mutate(level = factor(level, levels = c("National", "Autonomical", "Municipal"))) |>
+  count(prev_party, level) |>
+  pivot_wider(names_from = level, values_from = n, values_fill = 0) |>
+  mutate(Total = National + Autonomical + Municipal) |>
+  arrange(desc(Total)) |>
+  rename(`Previous party` = prev_party)
+
+stargazer(as.data.frame(previous_party_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidacies by previous party",
+          notes = "Parties the person had run for in an earlier year. A candidacy can count for several parties.")
+```
+
+
+```{r TABLE MULTI-LEVEL CAREERS}
+# how many people ran at one, two or three levels, and how often they were elected
+careers <- vox_candidates |>
+  group_by(person_id) |>
+  summarise(levels     = str_c(sort(unique(level)), collapse = " + "),
+            n_levels   = n_distinct(level),
+            elections  = n_distinct(election),
+            ever_elected = any(is_elected %in% TRUE),
+            .groups = "drop") |>
+  group_by(`Levels` = levels) |>
+  summarise(People                  = n(),
+            `Mean elections`        = round(mean(elections), 2),
+            `Ever elected (%)`      = round(100 * mean(ever_elected), 1),
+            .groups = "drop") |>
+  arrange(desc(People))
+
+stargazer(as.data.frame(careers), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidates by the levels of election they ran in")
+```
+
+
+```{r TERRITORIAL PENETRATION IN GENERAL ELECTIONS}
+library(mapSpain)
+library(sf)
+
+# ------------------------------------ constituencies where Vox ran a Congress list
+vox_general <- vox_candidates |>
+  filter(chamber == "Congress") |>
+  distinct(election, province) |>
+  left_join(provinces, by = "province") |>
+  mutate(presented = "Yes")
+
+# constituencies that could not be placed in a province (must return 0 rows)
+vox_general |> filter(is.na(province_code))
+
+general_elections <- vox_general |>
+  distinct(election) |>
+  mutate(election_label = str_replace(str_extract(election, "[0-9]{4}_[0-9]{2}"), "_", "-"))
+
+# ------------------------------------------ one map per election, all provinces
+vox_presence_map <- esp_get_prov(epsg = "3857") |>
+  cross_join(general_elections) |>
+  left_join(vox_general |> select(election, cpro = province_code, presented),
+            by = c("election", "cpro")) |>
+  mutate(presented = replace_na(presented, "No"))
+
+vox_presence_general <- ggplot(vox_presence_map) +
+  geom_sf(aes(fill = presented), colour = "white", linewidth = 0.15) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), fill = NA, colour = "grey60") +
+  scale_fill_manual(values = c("Yes" = "#009E73", "No" = "grey90"),
+                    name = "Vox list") +
+  facet_wrap(~ election_label) +
+  labs(title = "Provinces where Vox ran in each general election") +
+  theme_void() +
+  theme(legend.position = "bottom")
+
+vox_presence_general
+
+```
+
+
+```{r TERRITORIAL PENETRATION IN AUTONOMICAL ELECTIONS}
+library(mapSpain)
+library(sf)
+
+# regional constituencies that are not provinces: islands, districts, regional lists
+constituency_to_province <- tribble(
+  ~province_key,                ~province_code,
+  "REGION DE MURCIA",           "30",
+  "PRIMERA",                    "30",
+  "SEGUNDA",                    "30",
+  "TERCERA",                    "30",
+  "CUARTA",                     "30",
+  "QUINTA",                     "30",
+  "CENTRO",                     "33",
+  "OCCIDENTE",                  "33",
+  "ORIENTE",                    "33",
+  "MALLORCA",                   "07",
+  "MENORCA",                    "07",
+  "EIVISSA",                    "07",
+  "FORMENTERA",                 "07",
+  "GRAN CANARIA",               "35",
+  "LANZAROTE",                  "35",
+  "FUERTEVENTURA",              "35",
+  "TENERIFE",                   "38",
+  "LA PALMA",                   "38",
+  "LA GOMERA",                  "38",
+  "EL HIERRO",                  "38",
+  "CIRCUNSCRIPCION AUTONOMICA", "35",
+  "CIRCUNSCRIPCION AUTONOMICA", "38",
+  "CIUDAD",                     "13",   # "Ciudad Real" cut in the source
+  "ALAVA",                      "01"
+) |>
+  bind_rows(provinces |>
+              mutate(province_key = province |> str_to_upper() |> stringi::stri_trans_general("Latin-ASCII")) |>
+              select(province_key, province_code))
+
+# ------------------------------- provinces that voted in each regional election
+regional_lists <- autonomical_candidates |>
+  filter(year >= 2014) |>
+  mutate(province_key = province |> str_to_upper() |> stringi::stri_trans_general("Latin-ASCII") |> str_squish()) |>
+  left_join(constituency_to_province, by = "province_key", relationship = "many-to-many")
+
+# constituencies that could not be placed in a province (must return 0 rows)
+regional_lists |> filter(is.na(province_code)) |> distinct(chamber, province)
+
+regional_elections <- regional_lists |>
+  distinct(election, cpro = province_code) |>
+  left_join(esp_codelist |> distinct(cpro, ccaa = ccaa.shortname.es), by = "cpro") |>
+  group_by(election) |>
+  mutate(election_label = str_c(str_replace(str_extract(election, "[0-9]{4}_[0-9]{2}"), "_", "-"), "\n",
+                                if_else(n_distinct(ccaa) == 1, first(ccaa), str_c(n_distinct(ccaa), " regions")))) |>
+  ungroup()
+
+vox_regional <- regional_lists |>
+  filter(abbreviation == "VOX") |>
+  distinct(election, cpro = province_code) |>
+  mutate(presented = "Yes")
+
+# ------------------------------------------ one map per election, all provinces
+vox_presence_regional_map <- esp_get_prov(epsg = "3857") |>
+  cross_join(regional_elections |> distinct(election, election_label)) |>
+  left_join(regional_elections |> distinct(election, cpro) |> mutate(voted = TRUE), by = c("election", "cpro")) |>
+  left_join(vox_regional, by = c("election", "cpro")) |>
+  mutate(presented = case_when(!is.na(presented) ~ "Yes",
+                               voted             ~ "No",
+                               TRUE              ~ "No election"),
+         presented = factor(presented, levels = c("Yes", "No", "No election"))) |>
+  # keep only elections where Vox skipped at least one province that voted
+  group_by(election) |>
+  filter(any(presented == "No")) |>
+  ungroup()
+
+vox_presence_regional <- ggplot(vox_presence_regional_map) +
+  geom_sf(aes(fill = presented), colour = "grey75", linewidth = 0.1) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), fill = NA, colour = "grey60") +
+  scale_fill_manual(values = c("Yes" = "#009E73", "No" = "grey65", "No election" = "white"),
+                    name = "Vox list") +
+  facet_wrap(~ election_label, ncol = 2) +
+  labs(title = "Regional elections where Vox did not run everywhere") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 8))
+
+vox_presence_regional
+```
+
+
+
+## Social Network
+
+```{r EDGELIST CREATION}
+library(tidyverse)
+
+network_candidates <- vox_candidates |>
+  mutate(
+    contest = case_when(
+      level == "National" ~ election,
+      level == "Autonomical" ~ str_c(election, chamber, sep = " | "),
+      level == "Municipal" ~ str_c(
+        election,
+        coalesce(province, ""),
+        chamber,
+        sep = " | "
+      ),
+      TRUE ~ NA_character_
+    ),
+    # in municipal elections there are no CIS estimates, so the ex ante rule (previous
+    # result in the same municipality) misses the local breakthrough of 2019: the head
+    # of a list that won at least one councillor is also electable
+    electable = coalesce(top_expected, FALSE) | coalesce(top_won, FALSE) |
+      (level == "Municipal" & list_position == 1 & is_titular %in% c(TRUE, NA) & is_elected %in% TRUE)
+  ) |>
+  filter(!is.na(contest), !is.na(person_id))
+
+node_ids <- network_candidates |>
+  filter(electable) |>
+  distinct(person_id)
+
+# ---- members of Vox's satellite organisations ---------------------------------------------
+# every member is a node, whether or not they stood for Vox. The ones who did are matched
+# with their candidate name, which is often longer ("IVAN VELEZ" is "ISMAEL IVAN VELEZ
+# CIPRIANO"): the words of the member's name must appear in the candidate's name in the
+# same order, with a middle name allowed after the first one
+satellites <- c("DENAES", "Disenso", "ISSEP", "HazteOir", "CitizenGO", "Solidaridad", "Revuelta", "Homo Legens")
+
+satellite_members <- people |>
+  filter(organisation %in% satellites, str_count(person, " ") >= 1) |>
+  distinct(organisation, person)
+
+candidate_words <- network_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+# every candidate each member's name fits
+satellite_fits <- satellite_members |>
+  distinct(person) |>
+  # particles are dropped from both names ("IGNACIO DE HOCES INIGUEZ" is "IGNACIO HOCES INIGUEZ")
+  mutate(core = str_squish(str_remove_all(person, "\\b(DE|DEL|LA|LAS|LOS|Y)\\b")),
+         word = word(core, -1)) |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  mutate(candidate_core = str_squish(str_remove_all(person_id, "\\b(DE|DEL|LA|LAS|LOS|Y)\\b")),
+         pattern = str_c("^(.*?)\\b", word(core, 1), "\\b(.*?)\\b", word(core, 2, -1), "\\b"),
+         before  = str_match(candidate_core, pattern)[, 2],
+         between = str_match(candidate_core, pattern)[, 3]) |>
+  # the words before the member's first name and between it and the surname must be
+  # forenames of the INE census ("ISMAEL IVAN VELEZ", "ANA MARIA VELASCO"), never surnames:
+  # "SUSANA DIAZ" is not "SUSANA GARCIA DIAZ". A member named with more than one surname
+  # is specific enough to skip the test ("HERMANN TERTSCH VALLELERSUNDI" is "HERMANN
+  # LEOPOLD TERTSCH VALLELERSUNDI", and Leopold is not in the census)
+  filter(!is.na(before),
+         str_count(core, " ") >= 2 |
+           map_lgl(str_split(str_squish(str_c(before, " ", between)), " "),
+                   \(w) all(w %in% c("", census_forenames$forename)))) |>
+  distinct(person, person_id) |>
+  mutate(electable = person_id %in% node_ids$person_id)
+
+# a name that fits several candidates ("RICARDO CHAMORRO": Delmo and Arevalo) goes to the
+# one who was electable, if only one was; otherwise it is left out
+satellite_matches <- satellite_fits |>
+  filter(n() == 1 | (electable & sum(electable) == 1), .by = person)
+
+# members matched to a candidate under a longer name: check them
+satellite_matches |> filter(person != person_id) |> print(n = Inf)
+
+# names that fit several candidates and were left out: check them by hand
+satellite_fits |> filter(!person %in% satellite_matches$person) |> print(n = Inf)
+
+# members who never stood for Vox, or did so under a name that could not be matched:
+# look for the second kind here
+satellite_members |> filter(!person %in% satellite_fits$person) |> arrange(organisation, person) |> print(n = Inf)
+
+# each member with the id of their node: the candidate's if matched, their own otherwise
+satellite_nodes <- satellite_members |>
+  left_join(satellite_matches |> select(person, person_id), by = "person") |>
+  mutate(person_id = coalesce(person_id, person))
+
+# the members who stood for Vox join the candidacy network even if never electable
+node_ids <- node_ids |>
+  bind_rows(satellite_nodes |> filter(person_id %in% network_candidates$person_id) |> distinct(person_id)) |>
+  distinct()
+
+# ---- families of the previous parties, for the colours of the nodes ------------------
+# the far right split as in the text (Casals): nostalgic Francoist and Falangist right,
+# ultra-Catholic and traditionalist parties, national-populist right, neo-Nazi fringe
+# and personalist vehicles; the mainstream parties apart
+party_families <- tribble(
+  ~party,     ~family,
+  "PP",       "PP",
+  "AP",       "PP",
+  "Cs",       "Cs",
+  "FN",       "Francoist / Falangist",
+  "JJEE",     "Francoist / Falangist",
+  "FE-JONS",  "Francoist / Falangist",
+  "FA",       "Francoist / Falangist",
+  "FE-2000",  "Francoist / Falangist",
+  "LF",       "Francoist / Falangist",
+  "ADÑ",      "Francoist / Falangist",
+  "AES",      "Ultra-Catholic / traditionalist",
+  "CTC",      "Ultra-Catholic / traditionalist",
+  "DN",       "National-populist",
+  "E2000",    "National-populist",
+  "PxC",      "National-populist",
+  "VD",       "National-populist",
+  "SOMI",     "National-populist",
+  "PxL",      "National-populist",
+  "NOSOTROS", "National-populist",
+  "HN",       "National-populist",
+  "ADN",      "National-populist",
+  "MSR",      "Neo-Nazi",
+  "AN",       "Neo-Nazi",
+  "GIL",      "Personalist populist",
+  "ARM",      "Personalist populist",
+  "CDS",      "Other right and centre",
+  "PADE",     "Other right and centre",
+  "UPN",      "Other right and centre",
+  "Foro",     "Other right and centre",
+  "PDP",      "Other right and centre",
+  "AG",       "Other right and centre",
+  "SCD",      "Other right and centre",
+  "ACTUA",    "Other right and centre",   # Actúa Baleares
+  "SR",       "Other right and centre",   # Somos Región (Murcia)
+  "CiU",      "Other right and centre",
+  "PSOE",     "Left",
+  "PSC",      "Left",
+  "PCE-EPK",  "Left"
+)
+
+# a candidate with several families keeps the first one in this order: a far-right past
+# is kept over a mainstream one, being the rarer and more telling of the two
+family_order <- c("Neo-Nazi", "Francoist / Falangist", "Ultra-Catholic / traditionalist",
+                  "National-populist", "Personalist populist", "PP", "Cs",
+                  "Other right and centre", "Left", "None")
+
+# the palette to set in Gephi (Appearance > Nodes > Partition > prev_party_family)
+family_colours <- c("Neo-Nazi"                        = "#000000",
+                    "Francoist / Falangist"           = "#D55E00",
+                    "Ultra-Catholic / traditionalist" = "#6A3D9A",
+                    "National-populist"               = "#009E73",
+                    "Personalist populist"            = "#F0E442",
+                    "PP"                              = "#0072B2",
+                    "Cs"                              = "#E69F00",
+                    "Other right and centre"          = "#56B4E9",
+                    "Left"                            = "#CC79A7",
+                    "None"                            = "#D9D9D9")
+
+# a member of a satellite organisation is coloured by the organisation instead
+satellite_colours <- c("DENAES"      = "#8C510A",
+                       "Disenso"     = "#DFC27D",
+                       "ISSEP"       = "#E7298A",
+                       "HazteOir"    = "#66A61E",
+                       "CitizenGO"   = "#1B7837",
+                       "Solidaridad" = "#A50026",
+                       "Revuelta"    = "#FB9A99",
+                       "Homo Legens" = "#01665E")
+
+# parties without a family (must return 0 rows)
+vox_candidates |>
+  filter(!is.na(prev_party)) |>
+  separate_longer_delim(prev_party, " | ") |>
+  distinct(prev_party) |>
+  filter(!prev_party %in% party_families$party)
+
+vox_nodes <- network_candidates |>
+  semi_join(node_ids, by = "person_id") |>
+  group_by(person_id) |>
+  summarise(
+    name = first(candidate),
+    contests = n_distinct(contest),
+    contests_electable = n_distinct(contest[electable]),
+    has_prev_party = any(coalesce(has_prev_party, FALSE)),
+    prev_party = {
+      x <- prev_party[
+        coalesce(has_prev_party, FALSE) &
+          !is.na(prev_party)
+      ]
+      x <- x |>
+        str_split(fixed(" | ")) |>
+        unlist() |>
+        str_squish() |>
+        unique() |>
+        sort()
+      if (length(x) == 0) NA_character_ else str_c(x, collapse = " | ")
+    },
+    .groups = "drop"
+  ) |>
+  mutate(
+    n_prev_parties = case_when(
+      is.na(prev_party) ~ 0L,
+      TRUE ~ str_count(prev_party, fixed(" | ")) + 1L
+    ),
+    # every family of the person's previous parties, and the one that colours the node
+    prev_party_families = map_chr(str_split(replace_na(prev_party, ""), fixed(" | ")), \(p) {
+      families <- party_families$family[party_families$party %in% p]
+      if (length(families) == 0) "None" else str_c(intersect(family_order, families), collapse = " | ")
+    }),
+    prev_party_family = word(prev_party_families, 1, sep = fixed(" | "))
+  ) |>
+  # the members who never stood for Vox, as nodes of their own
+  bind_rows(satellite_nodes |>
+              filter(!person_id %in% network_candidates$person_id) |>
+              distinct(person_id) |>
+              mutate(name = str_to_title(person_id), contests = 0L, contests_electable = 0L,
+                     has_prev_party = FALSE, n_prev_parties = 0L,
+                     prev_party_families = "None", prev_party_family = "None")) |>
+  # the satellite organisations of each node (in the order of `satellites`)
+  left_join(satellite_nodes |>
+              summarise(organisations = str_c(intersect(satellites, organisation), collapse = " | "),
+                        .by = person_id),
+            by = "person_id") |>
+  mutate(satellite = !is.na(organisations),
+         candidate = contests > 0,
+         # the attribute that colours the node: the organisation for its members, the
+         # family of the previous party for everybody else
+         family    = if_else(satellite, word(organisations, 1, sep = fixed(" | ")), prev_party_family),
+         colour    = unname(c(family_colours, satellite_colours)[family]))
+
+participants <- network_candidates |>
+  semi_join(node_ids, by = "person_id") |>
+  group_by(contest, person_id) |>
+  summarise(
+    electable = any(electable),
+    .groups = "drop"
+  )
+
+vox_edges <- participants |>
+  inner_join(
+    participants,
+    by = "contest",
+    suffix = c("_from", "_to"),
+    relationship = "many-to-many"
+  ) |>
+  filter(
+    person_id_from < person_id_to,
+    electable_from | electable_to
+  ) |>
+  count(
+    from = person_id_from,
+    to = person_id_to,
+    name = "weight"
+  )
+
+# members of the same satellite organisation are linked as well; a pair can be linked by
+# both kinds of tie, recorded in `tie`
+organisation_edges <- satellite_nodes |>
+  distinct(organisation, person_id) |>
+  inner_join(satellite_nodes |> distinct(organisation, person_id), by = "organisation",
+             suffix = c("_from", "_to"), relationship = "many-to-many") |>
+  filter(person_id_from < person_id_to) |>
+  count(from = person_id_from, to = person_id_to, name = "weight")
+
+vox_edges <- bind_rows(vox_edges |> mutate(tie = "candidacy"),
+                       organisation_edges |> mutate(tie = "organisation")) |>
+  summarise(weight = sum(weight), tie = str_c(sort(unique(tie)), collapse = " + "), .by = c(from, to))
+
+vox_nodes |> count(family, colour, sort = TRUE)
+vox_edges |> count(tie)
+
+vox_nodes_gephi <- vox_nodes |>
+  mutate(Id = as.character(person_id), Label = as.character(name)) |>
+  select(Id, Label, family, prev_party, prev_party_family, prev_party_families, n_prev_parties,
+         has_prev_party, organisations, satellite, candidate, contests, contests_electable, colour)
+
+vox_edges_gephi <- vox_edges |>
+  mutate(Source = as.character(from), Target = as.character(to),
+         Type = "Undirected", Weight = as.numeric(weight)) |>
+  select(Source, Target, Type, Weight, tie)
+
+write_csv(vox_nodes_gephi, "vox_nodes_gephi.csv")
+write_csv(vox_edges_gephi, "vox_edges_gephi.csv")
+```
+
+
+```{r GEPHI}
+
+```
+
+```{r SOCIAL NETWORK ANALYSIS}
+
+```
+
+
+## Regressions
+
+```{r EXPECTED SEATS VARIABLE AS A PREDICTOR}
+library(sandwich)
+library(lmtest)
+library(broom)
+
+# ---- 1. one row per VOX list (election + chamber + constituency) ----------------------
+expected_check <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  group_by(level, election, chamber, province, expected_seats, expected_seats_source) |>
+  summarise(seats = sum(is_elected %in% TRUE), .groups = "drop") |>
+  mutate(from_cis = expected_seats_source == "CIS constituency estimate")
+
+expected_check |> count(level, expected_seats_source)
+
+# ---- 2. do the expected seats predict the seats actually won? --------------------------
+# standard errors clustered by election: constituencies of the same election share shocks
+models <- list(
+  "1 Pooled"      = lm(seats ~ expected_seats, data = expected_check),
+  "2 + level FE"  = lm(seats ~ expected_seats + level, data = expected_check),
+  "3 + source"    = lm(seats ~ expected_seats * from_cis + level, data = expected_check),
+  "4 National"    = lm(seats ~ expected_seats, data = filter(expected_check, level == "National")),
+  "5 Autonomical" = lm(seats ~ expected_seats, data = filter(expected_check, level == "Autonomical")),
+  "6 Municipal"   = lm(seats ~ expected_seats, data = filter(expected_check, level == "Municipal"))
+)
+
+regression_table <- list()
+for (m in names(models)) {
+  regression_table[[m]] <- coeftest(models[[m]],
+                                    vcov = vcovCL(models[[m]], cluster = ~ election)) |>
+    tidy() |>
+    mutate(model = m,
+           n     = nobs(models[[m]]),
+           r2    = summary(models[[m]])$r.squared)
+}
+regression_table <- bind_rows(regression_table) |>
+  select(model, term, estimate, std.error, p.value, n, r2) |>
+  mutate(across(c(estimate, std.error, r2), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+regression_table |> print(n = Inf)
+
+# ---- 3. the threshold: are the top_expected candidates the ones who got elected? --------
+electable_check <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(is_elected = is_elected %in% TRUE)
+
+electable_logit <- glm(is_elected ~ top_expected + level,
+                       family = binomial, data = electable_check)
+
+coeftest(electable_logit, vcov = vcovCL(electable_logit, cluster = ~ election)) |>
+  tidy() |>
+  mutate(odds_ratio = exp(estimate))
+
+# share elected among top_expected and the rest
+electable_check |>
+  group_by(level, top_expected) |>
+  summarise(candidates = n(), elected = sum(is_elected),
+            share_elected = mean(is_elected), .groups = "drop")
+
+# ---- 4. plot: expected seats against seats won -------------------------------------------
+ggplot(expected_check, aes(expected_seats, seats)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_jitter(aes(colour = expected_seats_source), width = 0.1, height = 0.1, alpha = 0.5, size = 1.6) +
+  geom_smooth(method = "lm", se = TRUE, colour = "black", linewidth = 0.7) +
+  facet_wrap(~ level, scales = "free") +
+  scale_colour_manual(values = c("CIS constituency estimate"          = "#0072B2",
+                                 "previous result, same constituency" = "#E69F00",
+                                 "no CIS estimate before 2018 (0)"    = "#CC79A7",
+                                 "first contest (0)"                  = "#999999")) +
+  labs(x = "Expected seats", y = "Seats actually won", colour = NULL,
+       title = "Do the expected seats predict the seats Vox actually won?",
+       subtitle = "One point per list. Dashed line: perfect prediction.") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r REGRESSION SEX}
+library(sandwich)
+library(lmtest)
+library(broom)
+library(survival)
+
+# Who gets an electable place? The Congress candidates of July 2023 are split in two
+# groups by ISCO_CANDIDATOS_VOX_2023.xlsx (isco08_group): those within the electoral
+# threshold of their constituency ("Dentro del umbral", the heads of list included) and
+# the three titulars right below it ("Justo debajo del umbral"), who are neither heads
+# of list nor above the threshold in that election. One row per person
+threshold_sample <- vox_candidates |>
+  filter(election == "general_2023_07", chamber == "Congress",
+         is_titular %in% c(TRUE, NA), !is.na(isco08_group)) |>
+  slice_min(list_position, n = 1, by = person_id, with_ties = FALSE) |>
+  mutate(electable      = isco08_group == "Dentro del umbral",
+         sex            = factor(sex, levels = c("Male", "Female")),
+         isco_class     = case_when(isco08_major == "1"  ~ "1 Managers",
+                                    isco08_major == "2"  ~ "2 Professionals",
+                                    !is.na(isco08_major) ~ "3 Rest",
+                                    TRUE                 ~ "4 Unknown") |>
+                            factor(levels = c("3 Rest", "1 Managers", "2 Professionals", "4 Unknown")),
+         prev_party_any = has_prev_party %in% TRUE) |>
+  select(person_id, candidate, province, list_position, electable, isco08_group, sex,
+         isco08, isco08_title, isco08_major, isco08_major_title, isco_class,
+         prev_party, prev_party_any, in_lists_2013_2017)
+
+threshold_sample |> count(isco08_group, electable)
+
+# the constituencies that identify the comparison: those with people in both groups
+threshold_sample |>
+  summarise(within = sum(electable), below = sum(!electable), .by = province) |>
+  arrange(desc(within)) |>
+  print(n = Inf)
+
+# ---- 1. sex: descriptives and Fisher exact test ----------------------------------------
+sex_table <- table(sex = threshold_sample$sex, electable = threshold_sample$electable)
+sex_table
+prop.table(sex_table, margin = 1) |> round(3)
+fisher.test(sex_table)
+
+# ---- 2. sex as a predictor of an electable place ----------------------------------------
+# the odds of an electable place are compared in two ways:
+#   a. a logit over the whole sample, standard errors clustered by constituency
+#   b. a conditional logit, which compares the candidates of the same constituency only
+#      (constituencies with no electable candidate drop out of this model)
+# list_position is not a control here: the two groups are defined by it
+threshold_models <- list(
+  "1 Logit"             = glm(electable ~ sex, family = binomial, data = threshold_sample),
+  "2 Conditional logit" = clogit(electable ~ sex + strata(province), data = threshold_sample)
+)
+
+# the table of every model: clustered standard errors for the logits, the model's own for
+# the conditional logit, which is already within constituency
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+```
+
+```{r REGRESSION ISCO + SEX}
+# The occupation before politics (ISCO-08 major group) added to sex. The four digit codes
+# are collapsed into managers (1), professionals (2), the rest (3-9) and "Unknown", the
+# candidates whose occupation was not found: they are 2 of the 44 within the threshold and
+# 61 of the 137 below it, so the category also measures how much press each group gets
+threshold_sample |> count(electable, isco_class)
+threshold_sample |> count(electable, isco08_major, isco08_major_title) |> print(n = Inf)
+
+isco_table <- table(isco = threshold_sample$isco_class, electable = threshold_sample$electable)
+isco_table
+prop.table(isco_table, margin = 1) |> round(3)
+fisher.test(isco_table)
+
+# the same, dropping the candidates without a known occupation
+fisher.test(isco_table[rownames(isco_table) != "4 Unknown", ])
+
+threshold_models <- list(
+  "1 Logit, ISCO"            = glm(electable ~ isco_class, family = binomial, data = threshold_sample),
+  "2 Logit, ISCO + sex"      = glm(electable ~ isco_class + sex, family = binomial, data = threshold_sample),
+  "3 Conditional logit"      = clogit(electable ~ isco_class + sex + strata(province), data = threshold_sample),
+  "4 Logit, ISCO known only" = glm(electable ~ isco_class + sex, family = binomial,
+                                   data = filter(threshold_sample, isco_class != "4 Unknown"))
+)
+
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+```
+
+
+```{r REGRESSION ISCO + SEX + PREV_PARTY}
+# A previous party added to the occupation and sex. has_prev_party is TRUE or NA, because
+# the absence of a previous party cannot be told apart from the absence of evidence of one;
+# to compare the two groups every NA is read here as FALSE (prev_party_any, built with the
+# sample), so the coefficient is the effect of a previous party *on record*
+threshold_sample |> count(electable, prev_party_any)
+threshold_sample |> filter(prev_party_any) |> count(electable, prev_party) |> print(n = Inf)
+
+party_table <- table(prev_party = threshold_sample$prev_party_any, electable = threshold_sample$electable)
+party_table
+prop.table(party_table, margin = 1) |> round(3)
+fisher.test(party_table)
+
+threshold_models <- list(
+  "1 Logit, party"              = glm(electable ~ prev_party_any, family = binomial, data = threshold_sample),
+  "2 Logit, ISCO + sex + party" = glm(electable ~ isco_class + sex + prev_party_any,
+                                      family = binomial, data = threshold_sample),
+  "3 Conditional logit"         = clogit(electable ~ isco_class + sex + prev_party_any + strata(province),
+                                         data = threshold_sample),
+  "4 + lists of 2013-2017"      = glm(electable ~ isco_class + sex + prev_party_any + in_lists_2013_2017,
+                                      family = binomial, data = threshold_sample)
+)
+
+threshold_table <- list()
+for (m in names(threshold_models)) {
+  threshold_table[[m]] <- (if (inherits(threshold_models[[m]], "coxph"))
+                             tidy(threshold_models[[m]])
+                           else
+                             coeftest(threshold_models[[m]],
+                                      vcov = vcovCL(threshold_models[[m]], cluster = ~ province)) |>
+                               tidy()) |>
+    mutate(model = m, n = nobs(threshold_models[[m]]))
+}
+threshold_table <- bind_rows(threshold_table) |>
+  filter(term != "(Intercept)") |>
+  mutate(odds_ratio = exp(estimate)) |>
+  select(model, term, estimate, std.error, odds_ratio, p.value, n) |>
+  mutate(across(c(estimate, std.error, odds_ratio), \(x) round(x, 3)),
+         p.value = signif(p.value, 3))
+
+threshold_table |> print(n = Inf)
+
+# an odds ratio in the thousands with a huge standard error means a category has no
+# variation left (complete separation): read the Fisher tables above instead
+```
+
+```{r CIS 2019 POLITICAL DETERMINANTS OF VOX SUPPORT}
+library(haven)
+
+# Figure 4.12 of the literature (average marginal effect of the political determinants of
+# the support for Vox) rebuilt with the microdata of the postelectoral survey of the general
+# election of November 2019: CIS, study 3269 (CIS 2019b)
+cis_file <- "MD3269/3269.sav"
+
+if (!file.exists(cis_file)) {
+  zip_file <- "MD3269.zip"
+  download.file("https://www.cis.es/documents/d/cis/MD3269", zip_file, mode = "wb",
+                method = "libcurl", headers = c("User-Agent" = "Mozilla/5.0"))
+  unzip(zip_file, exdir = "MD3269", junkpaths = TRUE)
+}
+
+cis_2019 <- read_sav(cis_file)
+
+# ---- 1. the variables of the figure ------------------------------------------------------
+# B22R      vote recalled in November 2019 (18 = VOX); blank, void, abstention and no answer out
+# C3        left-right self-placement, 1 (left) to 10 (right)
+# C12A      attendance at religious services: "frequent" is every Sunday or more often; the
+#           non-believers, who are not asked about it, do not attend
+# B1        interest in politics: "a lot" or "quite a lot"
+# B20       did what happened in Catalonia have an effect on your vote? (self-reported)
+# A9_1..3   the three most important problems of Spain: 18 immigration, 45 independence of
+#           Catalonia. The figure is reproduced with a problem named in any of the three
+#           answers; naming it first is the robustness check below
+# B30       national identity: "I feel only Spanish" is the exclusionary one
+# controls: sex, age, subjective class, education, household income, size of the
+#           municipality (the smaller, the more rural) and fixed effects of the autonomous
+#           community. Class, education and income keep a "N.C." level, so that the item
+#           non-response (40% of the income question) does not empty the sample, and the
+#           income brackets are grouped: with the raw ones nobody in the lowest voted VOX
+vox_support <- cis_2019 |>
+  mutate(vote                = as.numeric(B22R),
+         vox                 = as.integer(vote == 18),
+         left_right          = if_else(C3 <= 10, as.numeric(C3), NA),
+         church_attendance   = case_when(C12A %in% c(5, 6) ~ 1L, C12A == 9 ~ NA_integer_, TRUE ~ 0L),
+         political_interest  = case_when(B1 %in% c(1, 2) ~ 1L, B1 %in% c(3, 4) ~ 0L, TRUE ~ NA_integer_),
+         catalan_effect      = case_when(B20 == 1 ~ 1L, B20 == 2 ~ 0L, TRUE ~ NA_integer_),
+         problem_immigration = as.integer(A9_1 == 18 | A9_2 == 18 | A9_3 == 18) |> replace_na(0L),
+         problem_catalonia   = as.integer(A9_1 == 45 | A9_2 == 45 | A9_3 == 45) |> replace_na(0L),
+         first_immigration   = as.integer(A9_1 == 18),
+         first_catalonia     = as.integer(A9_1 == 45),
+         spanish_only        = case_when(B30 == 1 ~ 1L, B30 %in% c(2, 3, 4, 5, 7) ~ 0L, TRUE ~ NA_integer_),
+         female              = as.integer(C9 == 2),
+         age                 = as.numeric(C10),
+         class               = factor(if_else(CLASESUB %in% 1:5, as.character(CLASESUB), "N.C.")),
+         education           = factor(if_else(ESTUDIOS %in% 1:6, as.character(ESTUDIOS), "N.C.")),
+         income              = case_when(C19 %in% 1:4  ~ "1 up to 900",
+                                         C19 %in% 5:6  ~ "2 901-1800",
+                                         C19 %in% 7:8  ~ "3 1801-3000",
+                                         C19 %in% 9:11 ~ "4 over 3000",
+                                         TRUE          ~ "5 N.C.") |> factor(),
+         rurality            = 8 - as.numeric(TAMUNI),
+         ccaa                = factor(as.numeric(CCAA)),
+         weight              = as.numeric(PESO)) |>
+  filter(!is.na(vote), !vote %in% c(77, 96, 97, 98, 99)) |>
+  select(vox, left_right, church_attendance, political_interest, catalan_effect,
+         problem_immigration, problem_catalonia, first_immigration, first_catalonia,
+         spanish_only, female, age, class, education, income, rurality, ccaa, weight) |>
+  drop_na(vox, left_right, church_attendance, political_interest, catalan_effect,
+          problem_immigration, problem_catalonia, first_immigration, first_catalonia,
+          spanish_only, female, age, rurality)
+
+cat("voters:", nrow(vox_support), " VOX:", sum(vox_support$vox),
+    " share:", round(100 * mean(vox_support$vox), 1), "%\n")
+
+vox_support |>
+  summarise(n = n(),
+            across(c(left_right, church_attendance, political_interest, catalan_effect,
+                     problem_immigration, problem_catalonia, spanish_only), \(x) round(mean(x), 3)),
+            .by = vox)
+
+# ---- 2. logit of the vote for Vox ---------------------------------------------------------
+# the unweighted logit is the model of the figure; the other two are checks: the same model
+# with the weights of the survey, and with the problem named in the first place only
+vox_models <- list(
+  "1 Logit"          = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + problem_immigration + problem_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = binomial, data = vox_support),
+  "2 Weighted"       = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + problem_immigration + problem_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = quasibinomial, data = vox_support, weights = weight),
+  "3 First problem"  = glm(vox ~ left_right + church_attendance + political_interest +
+                             catalan_effect + first_immigration + first_catalonia +
+                             spanish_only + female + age + class + education + income +
+                             rurality + ccaa,
+                           family = binomial, data = vox_support)
+)
+
+tidy(vox_models[["1 Logit"]]) |>
+  filter(!str_detect(term, "^(ccaa|class|education|income)")) |>
+  mutate(odds_ratio = exp(estimate), across(where(is.numeric), \(x) signif(x, 3)))
+
+# the Basque Country has no VOX voter in the sample, so its fixed effect is separated and
+# its 110 respondents get a predicted probability of zero
+vox_support |> summarise(vox = sum(vox), n = n(), .by = ccaa) |> arrange(vox) |> head(3)
+
+# ---- 3. average marginal effects, in percentage points ------------------------------------
+# for the dummies, the average change of the predicted probability between 1 and 0; for the
+# left-right scale, the average slope of one point of the scale. The confidence intervals
+# are drawn from the coefficients (1000 draws of a normal with the estimated variance matrix)
+political_terms <- c("Left-right position"                          = "left_right",
+                     "(Frequent) church attendance"                 = "church_attendance",
+                     "Political interested"                         = "political_interest",
+                     "Catalan crisis had an effect (self-reported)" = "catalan_effect",
+                     "Most important problem = Immigration"         = "problem_immigration",
+                     "Most important problem = Catalan crisis"      = "problem_catalonia",
+                     "Exclusionary Spanish identity"                = "spanish_only")
+
+set.seed(20191110)
+margins <- list()
+for (m in names(vox_models)) {
+  design <- model.matrix(vox_models[[m]])
+  beta   <- coef(vox_models[[m]])
+  draws  <- t(MASS::mvrnorm(1000, beta, vcov(vox_models[[m]])))
+
+  for (label in names(political_terms)) {
+    v <- political_terms[[label]]
+    if (m == "3 First problem") v <- str_replace(v, "^problem", "first")
+    if (v == "left_right") {                      # continuous: the average derivative
+      effects <- colMeans(dlogis(design %*% draws) * rep(draws[v, ], each = nrow(design)))
+      point   <- mean(dlogis(design %*% beta) * beta[[v]])
+    } else {                                      # dummy: the average discrete change
+      design1 <- design; design1[, v] <- 1
+      design0 <- design; design0[, v] <- 0
+      effects <- colMeans(plogis(design1 %*% draws) - plogis(design0 %*% draws))
+      point   <- mean(plogis(design1 %*% beta) - plogis(design0 %*% beta))
+    }
+    margins[[str_c(m, label)]] <- tibble(model = m, term = label,
+                                         ame       = 100 * point,
+                                         conf_low  = 100 * quantile(effects, 0.025),
+                                         conf_high = 100 * quantile(effects, 0.975))
+  }
+}
+margins <- bind_rows(margins) |>
+  mutate(term = factor(term, levels = rev(names(political_terms))))
+
+margins |>
+  mutate(across(c(ame, conf_low, conf_high), \(x) round(x, 2))) |>
+  arrange(model, desc(term)) |>
+  print(n = Inf)
+
+# ---- 4. the figure ------------------------------------------------------------------------
+ggplot(filter(margins, model == "1 Logit"), aes(ame, term)) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey75", linewidth = 1.2) +
+  geom_linerange(aes(xmin = conf_low, xmax = conf_high), colour = "grey35") +
+  geom_point(size = 2.2, colour = "grey20") +
+  geom_text(aes(label = str_replace(as.character(signif(ame, 2)), "^(-?)0", "\\1")),
+            vjust = -1.1, size = 3, family = "serif") +
+  scale_x_continuous(limits = c(-5, 15), breaks = seq(-5, 15, 5)) +
+  labs(x = NULL, y = NULL,
+       title = "Political determinants of support for VOX",
+       caption = str_c("Confidence intervals (95%) | Controls not illustrated: gender, age, ",
+                       "class (self-reported), education, income, rurality, CCAA fixed effects\n",
+                       "Average marginal effects on the probability of voting VOX, in percentage ",
+                       "points. Own elaboration with CIS study 3269 (2019b), n = ", nrow(vox_support))) +
+  theme_minimal(base_size = 11, base_family = "serif") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12),
+        plot.caption = element_text(hjust = 0, size = 7, colour = "grey30"),
+        panel.grid = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dotted", colour = "grey80"),
+        axis.line.x = element_line(colour = "grey40"),
+        axis.ticks.x = element_line(colour = "grey40"),
+        plot.margin = margin(10, 20, 10, 10))
+```
+

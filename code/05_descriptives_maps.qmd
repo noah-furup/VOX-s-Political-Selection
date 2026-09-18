@@ -1,0 +1,518 @@
+---
+title: "05 · Descriptive results and maps"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Electoral results of Vox, candidates by level, the faceted cartogram of its vote and its access to regional government, and the maps of its territorial penetration.
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+
+# objects made by 02_data_extraction.qmd
+load(here("data", "processed", "02_data_extraction.RData"))
+
+# objects made by 03_satellite_organisations.qmd
+load(here("data", "processed", "03_satellite_organisations.RData"))
+
+# objects made by 04_data_enrichment.qmd
+load(here("data", "processed", "04_data_enrichment.RData"))
+```
+
+# Electoral results
+
+```{r TABLE VOX RESULTS}
+# one row per election: general elections keep Congress and Senate apart,
+# regional elections held on the same day are counted together
+vox_results <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(contest = if_else(level == "National", str_c(election, " ", chamber), election)) |>
+  group_by(level, date, contest) |>
+  summarise(lists            = n_distinct(chamber, province),
+            candidates       = n(),
+            seats_won        = sum(is_elected %in% TRUE),
+            lists_with_seats = n_distinct(chamber[is_elected %in% TRUE], province[is_elected %in% TRUE]),
+            expected_seats   = sum(top_expected),
+            .groups = "drop") |>
+  arrange(factor(level, levels = c("National", "Autonomical", "Municipal")), date) |>
+  select(Level = level, Election = contest, Lists = lists, Candidates = candidates,
+         `Expected seats` = expected_seats, `Seats won` = seats_won, `Lists with seats` = lists_with_seats)
+
+stargazer(as.data.frame(vox_results), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox electoral results by election",
+          notes = "Titular candidates only. Expected seats: candidates placed within the expected seats of their list.")
+```
+
+```{r FACETED CARTOGRAM MAP}
+library(mapSpain)
+library(sf)
+library(readxl)
+library(cartogram)
+
+# Vox's vote and its access to regional government in the four phases of the party, on
+# a contiguous cartogram (r-graph-gallery.com/331-basic-cartogram). Each region is
+# resized by its area times Vox's vote share there: the total size of Spain does not
+# change, and a region grows where Vox did better than its own average and shrinks where
+# it did worse. The size compares Vox with itself, not with the other parties
+phases <- tribble(
+  ~phase,       ~phase_start,       ~phase_end,
+  "2014-2017",  ymd("2014-01-01"),  ymd("2017-12-31"),
+  "2018-2019",  ymd("2018-01-01"),  ymd("2019-12-31"),
+  "2020-2022",  ymd("2020-01-01"),  ymd("2022-12-31"),
+  "2023-2026",  ymd("2023-01-01"),  ymd("2026-12-31")
+)
+
+# ---- 1. Vox's vote share by region in the general elections of each phase -------------
+# Congress results by constituency (Ministry of the Interior, infoelectoral, data/raw/infoelectoral_results).
+# There was no general election in 2020-2022: that phase keeps the result of November
+# 2019, the one in force during it
+general_by_phase <- tribble(
+  ~file,                   ~phase,       ~election,
+  here("data", "raw", "infoelectoral_results", "prov_02_201512_1.zip"),  "2014-2017",  "December 2015",
+  here("data", "raw", "infoelectoral_results", "prov_02_201606_1.zip"),  "2014-2017",  "June 2016",
+  here("data", "raw", "infoelectoral_results", "prov_02_201904_1.zip"),  "2018-2019",  "April 2019",
+  here("data", "raw", "infoelectoral_results", "prov_02_201911_1.zip"),  "2018-2019",  "November 2019",
+  here("data", "raw", "infoelectoral_results", "prov_02_201911_1.zip"),  "2020-2022",  "November 2019",
+  here("data", "raw", "infoelectoral_results", "prov_02_202307_1.zip"),  "2023-2026",  "July 2023"
+)
+
+# the party names are in row 2 or 3 of each file and the column labels in row 4; the
+# provinces start in row 5. Where Vox did not run, its votes are empty (0 votes)
+general_results <- tibble(file = unique(general_by_phase$file)) |>
+  mutate(results = map(file, \(f) {
+    raw   <- read_excel(unzip(f, exdir = tempdir()), col_names = FALSE, col_types = "text")
+    vox   <- which(unlist(raw[2, ]) == "VOX" | unlist(raw[3, ]) == "VOX")[1]
+    valid <- which(unlist(raw[4, ]) == "Votos válidos")
+    rows  <- which(str_detect(raw[[2]], "^[0-9]+$"))
+    tibble(cpro        = str_pad(raw[[2]][rows], 2, pad = "0"),
+           vox_votes   = replace_na(as.numeric(raw[[vox]][rows]), 0),
+           valid_votes = as.numeric(raw[[valid]][rows]))
+  })) |>
+  unnest(results)
+
+# 52 constituencies in every file (must return 0 rows)
+general_results |> count(file) |> filter(n != 52)
+
+# provinces added up to regions, and the elections of each phase averaged
+vote_by_phase <- general_by_phase |>
+  left_join(general_results, by = "file", relationship = "many-to-many") |>
+  left_join(esp_codelist |> distinct(cpro, codauto), by = "cpro") |>
+  summarise(vote_share = 100 * sum(vox_votes) / sum(valid_votes), .by = c(phase, election, codauto)) |>
+  summarise(vote_share = mean(vote_share), .by = c(phase, codauto))
+
+# ---- 2. Vox in the regional government, or propping up a PP government --------------
+# a Vox post counts in a phase if it started before the phase ended and ended after it
+# started (posts still held have no end date)
+vox_in_government <- vox_executive_positions |>
+  mutate(start = dmy(start_date), end = coalesce(dmy(end_date), today())) |>
+  left_join(tribble(~region,                 ~codauto,
+                    "Andalucía",             "01",
+                    "Aragón",                "02",
+                    "Castilla y León",       "07",
+                    "Comunidad Valenciana",  "10",
+                    "Extremadura",           "11",
+                    "Región de Murcia",      "14"), by = "region") |>
+  cross_join(phases) |>
+  filter(start <= phase_end, end >= phase_start) |>
+  distinct(codauto, phase)
+
+# PP governments that owed their investiture to the votes of Vox without Vox entering
+# them, in office at some point of the phase
+pp_needs_vox <- tribble(
+  ~codauto, ~phase,       ~investiture,
+  "01",     "2018-2019",  "Juan Manuel Moreno, January 2019 (PP-Cs)",
+  "13",     "2018-2019",  "Isabel Díaz Ayuso, August 2019 (PP-Cs)",
+  "14",     "2018-2019",  "Fernando López Miras, July 2019 (PP-Cs)",
+  "01",     "2020-2022",  "Juan Manuel Moreno, in office until July 2022",
+  "13",     "2020-2022",  "Isabel Díaz Ayuso, in office until 2021 and invested again with Vox votes in June 2021",
+  "14",     "2020-2022",  "Fernando López Miras, in office until 2023",
+  "04",     "2023-2026",  "Marga Prohens, July 2023"
+)
+
+# ---- 3. one contiguous cartogram per phase ----------------------------------------------
+# equal-area projection (the cartogram works with areas); the Canary Islands are moved
+# next to the peninsula before the calculation
+regions <- esp_get_ccaa(epsg = "3035") |>
+  select(codauto) |>
+  mutate(area = as.numeric(st_area(geometry)))
+
+# weight = area x vote share relative to Vox's national share in the phase. A region
+# where Vox did not run keeps 5% of its size (a weight of zero cannot be drawn)
+vox_cartogram <- phases$phase |>
+  map(\(p) regions |>
+        left_join(filter(vote_by_phase, phase == p), by = "codauto") |>
+        mutate(phase    = p,
+               relative = vote_share / weighted.mean(vote_share, area),
+               weight   = area * pmax(relative, 0.05)) |>
+        cartogram_cont("weight", itermax = 15)) |>
+  bind_rows() |>
+  mutate(status = case_when(
+           str_c(codauto, phase) %in% str_c(vox_in_government$codauto, vox_in_government$phase) ~ "Vox in the government",
+           str_c(codauto, phase) %in% str_c(pp_needs_vox$codauto, pp_needs_vox$phase)           ~ "PP government that needed Vox's votes",
+           TRUE                                                                                  ~ "Neither") |>
+           factor(levels = c("Vox in the government", "PP government that needed Vox's votes", "Neither")))
+
+# ---- 4. the map ---------------------------------------------------------------------------
+# national vote share in each phase, for the panel titles
+phase_names <- general_by_phase |>
+  left_join(general_results, by = "file", relationship = "many-to-many") |>
+  summarise(vote_share = 100 * sum(vox_votes) / sum(valid_votes), .by = c(phase, election)) |>
+  summarise(label = str_c(first(phase), "\n", str_c(election, collapse = " and "), ": ",
+                          str_c(format(round(vote_share, 1), nsmall = 1), "%", collapse = " and ")),
+            .by = phase) |>
+  deframe()
+
+ggplot(vox_cartogram) +
+  geom_sf(aes(fill = status), colour = "white", linewidth = 0.2) +
+  scale_fill_manual(values = c("Vox in the government"                 = "#1b7a3d",
+                               "PP government that needed Vox's votes" = "#9fd3ad",
+                               "Neither"                               = "grey70"),
+                    drop = FALSE, name = NULL) +
+  facet_wrap(~ phase, ncol = 2, labeller = as_labeller(phase_names)) +
+  labs(title = "Vox's vote and its access to regional government",
+       subtitle = "Regions resized by Vox's vote there: larger where Vox did better than its own average",
+       caption = str_c("Size: area of the region times Vox's share of the valid vote in the general elections of the phase,\n",
+                       "relative to its national share (a region where Vox did not run keeps 5% of its size).\n",
+                       "Colour: Vox held a post in the regional government, or its votes were needed to invest a PP president,\n",
+                       "at any point of the phase. Source: Ministry of the Interior (infoelectoral). Canary Islands moved next to the peninsula.")) +
+  theme_void() +
+  theme(text = element_text(colour = "#22211d"),
+        plot.background = element_rect(fill = "#f5f5f4", colour = NA),
+        panel.background = element_rect(fill = "#f5f5f4", colour = NA),
+        legend.background = element_rect(fill = "#f5f5f4", colour = NA),
+        plot.title = element_text(size = 16, hjust = 0.5, colour = "#4e4d47"),
+        plot.subtitle = element_text(size = 9, hjust = 0.5, colour = "#4e4d47", margin = margin(b = 8)),
+        plot.caption = element_text(size = 7, hjust = 0, colour = "grey40"),
+        strip.text = element_text(size = 9, margin = margin(b = 4)),
+        legend.position = "bottom",
+        legend.text = element_text(size = 8),
+        plot.margin = margin(10, 10, 10, 10))
+```
+
+```{r MAP COUNCILLERS PRE 2018}
+library(mapSpain)
+library(sf)
+
+# Vox councillors elected in the 2015 municipal elections (Vox's only local seats before 2018)
+councillors_2015 <- vox_candidates |>
+  filter(level == "Municipal", year == 2015, is_elected %in% TRUE) |>
+  count(province, chamber, name = "councillors") |>
+  mutate(muni_key = chamber |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(\(x) str_c(sort(str_squish(x)), collapse = "/")))
+
+municipalities_map <- esp_get_munic(epsg = "3857") |>
+  left_join(provinces, by = c("cpro" = "province_code")) |>
+  mutate(muni_key = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_split("/") |>
+           map_chr(\(x) str_c(sort(str_squish(x)), collapse = "/")))
+
+councillors_map <- municipalities_map |>
+  inner_join(councillors_2015, by = c("muni_key", "province"))
+
+# councillors whose municipality was not found on the map (must return 0 rows)
+councillors_2015 |> anti_join(st_drop_geometry(councillors_map), by = c("muni_key", "province"))
+
+# one point per municipality, at its centroid
+councillors_centroids <- st_centroid(councillors_map)
+
+councillors_points <- councillors_centroids |>
+  st_drop_geometry() |>
+  bind_cols(as_tibble(st_coordinates(councillors_centroids)))
+
+ggplot() +
+  geom_sf(data = esp_get_prov(epsg = "3857"), fill = "grey95", colour = "grey70", linewidth = 0.2) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), colour = "grey60") +
+  geom_point(data = councillors_points, aes(X, Y, size = councillors), colour = "#009E73") +
+  ggrepel::geom_text_repel(data = councillors_points, aes(X, Y, label = str_c(name, " (", councillors, ")")),
+                           size = 3, min.segment.length = 0) +
+  scale_size_continuous(range = c(2, 5), breaks = 1:3, name = "Councillors") +
+  labs(title = "Vox councillors before 2018",
+       subtitle = "Municipal elections of May 2015") +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r TABLE VOX CANDIDATES BY LEVELS}
+# profile of the candidates at each level (one row per candidacy); the Total column counts
+# every candidacy once, so a person elected at two levels is one of its elected people
+candidates_by_level <- vox_candidates |>
+  bind_rows(vox_candidates |> mutate(level = "Total")) |>
+  mutate(level = factor(level, levels = c("National", "Autonomical", "Municipal", "Total"))) |>
+  group_by(level) |>
+  summarise(`Candidacies`                        = n(),
+            `Different people`                   = n_distinct(person_id),
+            `Different people elected`           = n_distinct(person_id[is_elected %in% TRUE]),
+            `Elections`                          = n_distinct(election),
+            `Women (%)`                          = round(100 * mean(sex[!is.na(sex)] == "Female"), 1),
+            `Elected (%)`                        = round(100 * mean(is_elected %in% TRUE), 1),
+            `Within expected seats (%)`          = round(100 * mean(top_expected), 1),
+            `Seat in previous election (%)`      = round(100 * mean(had_seat_before), 1),
+            # has_prev_party is TRUE or NA: the NA count as no party on record
+            `Ran for another party before (%)`   = round(100 * mean(has_prev_party %in% TRUE), 1),
+            `In the CEN before the election (%)` = round(100 * mean(in_cen_before), 2),
+            `Organic position in Vox (%)`        = round(100 * mean(has_organic_position), 2),
+            .groups = "drop") |>
+  mutate(level = as.character(level)) |>
+  pivot_longer(-level, names_to = "Variable") |>
+  pivot_wider(names_from = level, values_from = value)
+
+stargazer(as.data.frame(candidates_by_level), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidates by level of election",
+          notes = "One row per candidacy. Sex of municipal candidates inferred from the forename (INE census).")
+
+# the same variables for the candidates within the expected seats and the rest
+candidates_by_expected <- vox_candidates |>
+  mutate(group = if_else(top_expected, "Within expected seats", "Rest of the list")) |>
+  group_by(group) |>
+  summarise(`Candidacies`                        = n(),
+            `Women (%)`                          = round(100 * mean(sex[!is.na(sex)] == "Female"), 1),
+            `Elected (%)`                        = round(100 * mean(is_elected %in% TRUE), 1),
+            `Seat in previous election (%)`      = round(100 * mean(had_seat_before), 1),
+            `Ran for another party before (%)`   = round(100 * mean(has_prev_party %in% TRUE), 1),
+            `In the CEN before the election (%)` = round(100 * mean(in_cen_before), 2),
+            `Mean list position`                 = round(mean(list_position, na.rm = TRUE), 1),
+            .groups = "drop") |>
+  pivot_longer(-group, names_to = "Variable") |>
+  pivot_wider(names_from = group, values_from = value)
+
+stargazer(as.data.frame(candidates_by_expected), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Candidates within and outside the expected seats")
+```
+
+
+```{r MAP VOX GOVERNMENT}
+# regions where Vox has held regional government posts, by coalition period
+government_by_region <- vox_executive_positions |>
+  mutate(period = if_else(str_ends(start_date, "2026"), "2026 onwards", "2022-2024")) |>
+  group_by(region, period) |>
+  summarise(posts = n_distinct(position), .groups = "drop") |>   # Limia and Higuero held the same post
+  mutate(codauto = case_match(region,
+                              "Andalucía"            ~ "01",
+                              "Aragón"               ~ "02",
+                              "Castilla y León"      ~ "07",
+                              "Comunidad Valenciana" ~ "10",
+                              "Extremadura"          ~ "11",
+                              "Región de Murcia"     ~ "14"))
+
+government_map <- esp_get_ccaa(epsg = "3857") |>
+  cross_join(tibble(period = c("2022-2024", "2026 onwards"))) |>
+  left_join(government_by_region, by = c("codauto", "period"))
+
+ggplot(government_map) +
+  geom_sf(aes(fill = posts), colour = "white", linewidth = 0.2) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), colour = "grey60") +
+  scale_fill_gradient(low = "#b7e4c7", high = "#1b7a3d", na.value = "grey90",
+                      breaks = 1:4, name = "Vox posts in\nthe regional government") +
+  facet_wrap(~ period) +
+  labs(title = "Vox in regional governments") +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r TABLE VOX IN REGIONAL GOVERNMENTS}
+# every government post, and whether the person had been a Vox candidate in that election
+executive_table <- vox_executive_positions |>
+  left_join(vox_candidates |> distinct(name = person_id, election) |> mutate(candidate = "Yes"),
+            by = c("name", "election")) |>
+  mutate(candidate = replace_na(candidate, "No"),
+         end_date  = replace_na(end_date, "in office")) |>
+  select(Region = region, Name = name, Position = position, From = start_date, To = end_date,
+         `Vox candidate in that election` = candidate)
+
+stargazer(as.data.frame(executive_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox members of regional governments")
+```
+
+
+```{r TABLE PREVIOUS PARTY OF VOX CANDIDATES}
+# candidacies by the parties the person had run for before (a candidacy can count for several)
+previous_party_table <- vox_candidates |>
+  filter(has_prev_party) |>
+  separate_longer_delim(prev_party, " | ") |>
+  mutate(level = factor(level, levels = c("National", "Autonomical", "Municipal"))) |>
+  count(prev_party, level) |>
+  pivot_wider(names_from = level, values_from = n, values_fill = 0) |>
+  mutate(Total = National + Autonomical + Municipal) |>
+  arrange(desc(Total)) |>
+  rename(`Previous party` = prev_party)
+
+stargazer(as.data.frame(previous_party_table), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidacies by previous party",
+          notes = "Parties the person had run for in an earlier year. A candidacy can count for several parties.")
+```
+
+
+```{r TABLE MULTI-LEVEL CAREERS}
+# how many people ran at one, two or three levels, and how often they were elected
+careers <- vox_candidates |>
+  group_by(person_id) |>
+  summarise(levels     = str_c(sort(unique(level)), collapse = " + "),
+            n_levels   = n_distinct(level),
+            elections  = n_distinct(election),
+            ever_elected = any(is_elected %in% TRUE),
+            .groups = "drop") |>
+  group_by(`Levels` = levels) |>
+  summarise(People                  = n(),
+            `Mean elections`        = round(mean(elections), 2),
+            `Ever elected (%)`      = round(100 * mean(ever_elected), 1),
+            .groups = "drop") |>
+  arrange(desc(People))
+
+stargazer(as.data.frame(careers), summary = FALSE, rownames = FALSE, type = table_type,
+          title = "Vox candidates by the levels of election they ran in")
+```
+
+
+```{r TERRITORIAL PENETRATION IN GENERAL ELECTIONS}
+library(mapSpain)
+library(sf)
+
+# ------------------------------------ constituencies where Vox ran a Congress list
+vox_general <- vox_candidates |>
+  filter(chamber == "Congress") |>
+  distinct(election, province) |>
+  left_join(provinces, by = "province") |>
+  mutate(presented = "Yes")
+
+# constituencies that could not be placed in a province (must return 0 rows)
+vox_general |> filter(is.na(province_code))
+
+general_elections <- vox_general |>
+  distinct(election) |>
+  mutate(election_label = str_replace(str_extract(election, "[0-9]{4}_[0-9]{2}"), "_", "-"))
+
+# ------------------------------------------ one map per election, all provinces
+vox_presence_map <- esp_get_prov(epsg = "3857") |>
+  cross_join(general_elections) |>
+  left_join(vox_general |> select(election, cpro = province_code, presented),
+            by = c("election", "cpro")) |>
+  mutate(presented = replace_na(presented, "No"))
+
+vox_presence_general <- ggplot(vox_presence_map) +
+  geom_sf(aes(fill = presented), colour = "white", linewidth = 0.15) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), fill = NA, colour = "grey60") +
+  scale_fill_manual(values = c("Yes" = "#009E73", "No" = "grey90"),
+                    name = "Vox list") +
+  facet_wrap(~ election_label) +
+  labs(title = "Provinces where Vox ran in each general election") +
+  theme_void() +
+  theme(legend.position = "bottom")
+
+vox_presence_general
+
+```
+
+
+```{r TERRITORIAL PENETRATION IN AUTONOMICAL ELECTIONS}
+library(mapSpain)
+library(sf)
+
+# regional constituencies that are not provinces: islands, districts, regional lists
+constituency_to_province <- tribble(
+  ~province_key,                ~province_code,
+  "REGION DE MURCIA",           "30",
+  "PRIMERA",                    "30",
+  "SEGUNDA",                    "30",
+  "TERCERA",                    "30",
+  "CUARTA",                     "30",
+  "QUINTA",                     "30",
+  "CENTRO",                     "33",
+  "OCCIDENTE",                  "33",
+  "ORIENTE",                    "33",
+  "MALLORCA",                   "07",
+  "MENORCA",                    "07",
+  "EIVISSA",                    "07",
+  "FORMENTERA",                 "07",
+  "GRAN CANARIA",               "35",
+  "LANZAROTE",                  "35",
+  "FUERTEVENTURA",              "35",
+  "TENERIFE",                   "38",
+  "LA PALMA",                   "38",
+  "LA GOMERA",                  "38",
+  "EL HIERRO",                  "38",
+  "CIRCUNSCRIPCION AUTONOMICA", "35",
+  "CIRCUNSCRIPCION AUTONOMICA", "38",
+  "CIUDAD",                     "13",   # "Ciudad Real" cut in the source
+  "ALAVA",                      "01"
+) |>
+  bind_rows(provinces |>
+              mutate(province_key = province |> str_to_upper() |> stringi::stri_trans_general("Latin-ASCII")) |>
+              select(province_key, province_code))
+
+# ------------------------------- provinces that voted in each regional election
+regional_lists <- autonomical_candidates |>
+  filter(year >= 2014) |>
+  mutate(province_key = province |> str_to_upper() |> stringi::stri_trans_general("Latin-ASCII") |> str_squish()) |>
+  left_join(constituency_to_province, by = "province_key", relationship = "many-to-many")
+
+# constituencies that could not be placed in a province (must return 0 rows)
+regional_lists |> filter(is.na(province_code)) |> distinct(chamber, province)
+
+regional_elections <- regional_lists |>
+  distinct(election, cpro = province_code) |>
+  left_join(esp_codelist |> distinct(cpro, ccaa = ccaa.shortname.es), by = "cpro") |>
+  group_by(election) |>
+  mutate(election_label = str_c(str_replace(str_extract(election, "[0-9]{4}_[0-9]{2}"), "_", "-"), "\n",
+                                if_else(n_distinct(ccaa) == 1, first(ccaa), str_c(n_distinct(ccaa), " regions")))) |>
+  ungroup()
+
+vox_regional <- regional_lists |>
+  filter(abbreviation == "VOX") |>
+  distinct(election, cpro = province_code) |>
+  mutate(presented = "Yes")
+
+# ------------------------------------------ one map per election, all provinces
+vox_presence_regional_map <- esp_get_prov(epsg = "3857") |>
+  cross_join(regional_elections |> distinct(election, election_label)) |>
+  left_join(regional_elections |> distinct(election, cpro) |> mutate(voted = TRUE), by = c("election", "cpro")) |>
+  left_join(vox_regional, by = c("election", "cpro")) |>
+  mutate(presented = case_when(!is.na(presented) ~ "Yes",
+                               voted             ~ "No",
+                               TRUE              ~ "No election"),
+         presented = factor(presented, levels = c("Yes", "No", "No election"))) |>
+  # keep only elections where Vox skipped at least one province that voted
+  group_by(election) |>
+  filter(any(presented == "No")) |>
+  ungroup()
+
+vox_presence_regional <- ggplot(vox_presence_regional_map) +
+  geom_sf(aes(fill = presented), colour = "grey75", linewidth = 0.1) +
+  geom_sf(data = esp_get_can_box(epsg = "3857"), fill = NA, colour = "grey60") +
+  scale_fill_manual(values = c("Yes" = "#009E73", "No" = "grey65", "No election" = "white"),
+                    name = "Vox list") +
+  facet_wrap(~ election_label, ncol = 2) +
+  labs(title = "Regional elections where Vox did not run everywhere") +
+  theme_void() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 8))
+
+vox_presence_regional
+```
+

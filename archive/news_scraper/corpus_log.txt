@@ -1,0 +1,142 @@
+[14:41:52] No se pudo leer la API. Aborto. 
+[14:45:14] Consultando CDX API (puede tardar)... 
+[14:45:24] Capturas encontradas: 32656 
+[14:45:25] Reanudando: 0 noticias ya guardadas. 
+[14:45:25] Fase 2: 32656 capturas por descargar. 
+[14:46:28]   25/32656 procesadas 
+[14:47:31]   50/32656 procesadas 
+[14:48:49]   75/32656 procesadas 
+[14:50:17]   100/32656 procesadas 
+[14:51:40]   125/32656 procesadas 
+[14:53:00]   150/32656 procesadas 
+[14:54:31]   175/32656 procesadas 
+[14:56:00]   200/32656 procesadas 
+[14:57:17]   225/32656 procesadas 
+[14:58:35]   250/32656 procesadas 
+[15:00:00]   275/32656 procesadas 
+[15:01:27]   300/32656 procesadas 
+[15:03:00]   325/32656 procesadas 
+[15:04:17]   350/32656 procesadas 
+[15:05:33]   375/32656 procesadas 
+[15:06:57]   400/32656 procesadas 
+[15:08:17]   425/32656 procesadas 
+[15:09:38]   450/32656 procesadas 
+[15:10:54]   475/32656 procesadas 
+[15:12:13]   500/32656 procesadas 
+[15:13:36]   525/32656 procesadas 
+[15:14:59]   550/32656 procesadas 
+[15:16:21]   575/32656 procesadas 
+[15:17:53]   600/32656 procesadas 
+[15:19:23]   625/32656 procesadas 
+[15:20:38]   650/32656 procesadas 
+[15:21:59]   675/32656 procesadas 
+[15:23:17]   700/32656 procesadas 
+[15:24:36]   725/32656 procesadas 
+[15:25:46]   750/32656 procesadas 
+[15:27:05]   775/32656 procesadas 
+[15:28:25]   800/32656 procesadas 
+[15:29:41]   825/32656 procesadas 
+[15:30:59]   850/32656 procesadas 
+[15:32:18]   875/32656 procesadas 
+[15:33:41]   900/32656 procesadas 
+[15:34:58]   925/32656 procesadas 
+[15:36:17]   950/32656 procesadas 
+[15:37:35]   975/32656 procesadas 
+[15:38:59]   1000/32656 procesadas 
+[15:40:18]   1025/32656 procesadas 
+[15:41:37]   1050/32656 procesadas 
+[15:42:50]   1075/32656 procesadas 
+[15:44:14]   1100/32656 procesadas 
+[15:45:51]   1125/32656 procesadas 
+[15:47:07]   1150/32656 procesadas 
+[11:48:43]   1175/32656 procesadas 
+[11:49:29]   1200/32656 procesadas 
+[11:50:12]   1225/32656 procesadas 
+[11:50:55]   1250/32656 procesadas 
+[11:51:38]   1275/32656 procesadas 
+[11:52:28]   1300/32656 procesadas 
+[11:53:12]   1325/32656 procesadas 
+[18:24:30] capturas_cdx.csv ya existe; se reutiliza. Bórralo para rehacer. 
+[18:24:32] Reanudando: 1156 noticias ya guardadas. 
+[18:24:32] Fase 2: 32656 capturas por descargar. 
+[18:25:39]   25/32656 procesadas 
+[18:26:37]   50/32656 procesadas 
+[18:27:51]   75/32656 procesadas 
+[18:29:05]   100/32656 procesadas 
+[18:30:26]   125/32656 procesadas 
+[18:31:40]   150/32656 procesadas 
+[18:33:04]   175/32656 procesadas 
+[18:34:21]   200/32656 procesadas 
+[18:35:40]   225/32656 procesadas 
+[18:37:02]   250/32656 procesadas 
+[18:38:23]   275/32656 procesadas 
+[18:39:47]   300/32656 procesadas 
+[18:41:12]   325/32656 procesadas 
+[18:42:35]   350/32656 procesadas 
+[18:43:53]   375/32656 procesadas 
+[18:45:15]   400/32656 procesadas 
+[18:46:31]   425/32656 procesadas 
+[18:47:49]   450/32656 procesadas 
+[18:49:14]   475/32656 procesadas 
+[18:50:30]   500/32656 procesadas 
+[18:51:48]   525/32656 procesadas 
+[18:53:09]   550/32656 procesadas 
+[18:54:28]   575/32656 procesadas 
+[18:55:53]   600/32656 procesadas 
+[18:57:11]   625/32656 procesadas 
+[18:58:32]   650/32656 procesadas 
+[18:59:54]   675/32656 procesadas 
+[19:01:21]   700/32656 procesadas 
+[19:02:43]   725/32656 procesadas 
+[19:04:09]   750/32656 procesadas 
+[19:05:30]   775/32656 procesadas 
+[19:06:46]   800/32656 procesadas 
+[19:08:02]   825/32656 procesadas 
+[19:09:19]   850/32656 procesadas 
+[19:10:43]   875/32656 procesadas 
+[19:12:19]   900/32656 procesadas 
+[19:13:39]   925/32656 procesadas 
+[19:15:05]   950/32656 procesadas 
+[19:16:28]   975/32656 procesadas 
+[19:17:55]   1000/32656 procesadas 
+[19:19:13]   1025/32656 procesadas 
+[19:20:36]   1050/32656 procesadas 
+[19:21:54]   1075/32656 procesadas 
+[19:23:12]   1100/32656 procesadas 
+[19:24:36]   1125/32656 procesadas 
+[19:25:53]   1150/32656 procesadas 
+[19:27:09]   1175/32656 procesadas 
+[19:28:31]   1200/32656 procesadas 
+[19:29:59]   1225/32656 procesadas 
+[19:31:17]   1250/32656 procesadas 
+[19:32:40]   1275/32656 procesadas 
+[19:33:58]   1300/32656 procesadas 
+[19:35:15]   1325/32656 procesadas 
+[19:36:27]   1350/32656 procesadas 
+[19:37:41]   1375/32656 procesadas 
+[19:39:04]   1400/32656 procesadas 
+[19:40:18]   1425/32656 procesadas 
+[19:41:33]   1450/32656 procesadas 
+[19:43:01]   1475/32656 procesadas 
+[19:44:13]   1500/32656 procesadas 
+[19:45:30]   1525/32656 procesadas 
+[22:04:04]   1550/32656 procesadas 
+[22:08:05]   1575/32656 procesadas 
+[2026-08-31 19:39:30] Descargando taxonomías (categorías y etiquetas)... 
+[2026-08-31 19:41:15] Taxonomías: 0 categorías, 0 etiquetas. 
+[2026-08-31 19:41:15] === Ventana: generales_2019A (2019-03-20T00:00:00 -> 2019-04-28T23:59:59) === 
+[2026-08-31 19:42:07] generales_2019A pág. 1: fallo tras reintentos, salto. 
+[2026-08-31 19:43:00] generales_2019A pág. 2: fallo tras reintentos, salto. 
+[2026-08-31 19:43:53] generales_2019A pág. 3: fallo tras reintentos, salto. 
+[2026-08-31 19:44:46] generales_2019A pág. 4: fallo tras reintentos, salto. 
+[2026-08-31 19:45:41] generales_2019A pág. 5: fallo tras reintentos, salto. 
+[2026-08-31 19:46:35] generales_2019A pág. 6: fallo tras reintentos, salto. 
+[2026-08-31 19:47:29] generales_2019A pág. 7: fallo tras reintentos, salto. 
+[2026-08-31 19:48:23] generales_2019A pág. 8: fallo tras reintentos, salto. 
+[2026-08-31 19:49:16] generales_2019A pág. 9: fallo tras reintentos, salto. 
+[2026-08-31 19:50:10] generales_2019A pág. 10: fallo tras reintentos, salto. 
+[2026-08-31 19:51:03] generales_2019A pág. 11: fallo tras reintentos, salto. 
+[19:52:17] capturas_cdx.csv ya existe; se reutiliza. Bórralo para rehacer. 
+[19:52:18] Reanudando: 2719 noticias ya guardadas. 
+[19:52:18] Fase 2: 32656 capturas por descargar. 
+[19:53:39]   25/32656 procesadas 

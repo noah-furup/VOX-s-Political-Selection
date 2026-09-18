@@ -1,0 +1,578 @@
+---
+title: "04 · Variables of the candidates"
+subtitle: "How Vox selects its candidates · Master Final Project"
+author: "Noah Emanuel Fürup"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+editor: visual
+---
+
+Clean names and sex, signatories and founders, government and party posts, seats won, expected seats and the electability threshold, occupation (ISCO-08), candidacies in 2013-2017 and previous parties.
+
+```{r SETUP}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(httr2)
+library(countrycode)
+library(mapSpain)
+library(stargazer)
+library(rvest)
+library(here)
+
+# tables are printed as text here; use type = "html" (or "latex") for the written document
+table_type <- "text"
+
+# objects made by 01_context.qmd
+load(here("data", "processed", "01_context.RData"))
+
+# objects made by 02_data_extraction.qmd
+load(here("data", "processed", "02_data_extraction.RData"))
+```
+
+```{r CLEAN HTML IN CANDIDATE NAMES}
+# some names come with the markup of the page they were scraped from:
+# "Aitor&nbsp;<span class="searchMatch">Caneda</span>&nbsp;Manso". The markup is
+# read as HTML (tags dropped, entities decoded) and person_id is built again
+vox_candidates <- vox_candidates |>
+  mutate(candidate = map_chr(candidate, \(x)
+           if (!is.na(x) && str_detect(x, "[<&]")) xml2::xml_text(xml2::read_html(str_c("<p>", x, "</p>"))) else x) |>
+           str_squish(),
+         person_id = candidate |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+# must return 0 rows
+vox_candidates |> filter(str_detect(candidate, "[<>&;]"))
+```
+
+
+# Variables of the candidates
+
+```{r HARMONIZE SEX}
+# every source writes sex its own way ("M"/"F", "Hombre"/"Mujer", "Male"/"Female")
+# and the municipal lists do not carry it at all. Harmonised to Female/Male, and
+# filled, in this order: 1. what the list says, 2. what the other lists of the same
+# person say, 3. the forename, with the INE census of names
+
+# 1. the forenames of the INE census, each with the sex of most of its holders
+ine_forenames_sex <- bind_rows(
+  read_excel(here("data", "raw", "ine", "ine_nombres_edad_media.xlsx"), sheet = "Hombres", skip = 5) |> mutate(sex_forename = "Male"),
+  read_excel(here("data", "raw", "ine", "ine_nombres_edad_media.xlsx"), sheet = "Mujeres", skip = 5) |> mutate(sex_forename = "Female")) |>
+  mutate(forename = Nombre |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  filter(!is.na(forename)) |>
+  slice_max(Frecuencia, n = 1, by = forename, with_ties = FALSE) |>
+  select(forename, sex_forename, frequency = Frecuencia) |>
+  arrange(desc(frequency))
+
+# 2. what each list says, harmonised ("MUJER" is checked before the "M" of Male)
+vox_candidates <- vox_candidates |>
+  mutate(sex = case_when(str_detect(str_to_upper(sex), "^(F|MUJER|FEMALE|FEMENINO)") ~ "Female",
+                         str_detect(str_to_upper(sex), "^(M|H|MALE|HOMBRE|MASCULINO|VARON)") ~ "Male"))
+
+# 3. the sex the person has in their other lists
+sex_by_person <- vox_candidates |>
+  filter(!is.na(sex)) |>
+  count(person_id, sex) |>
+  slice_max(n, n = 1, by = person_id, with_ties = FALSE) |>
+  select(person_id, sex_person = sex)
+
+# 4. the sex of the forename, trying in this order:
+#    a. the first two words ("MARIA JOSE", "JOSE MARIA"); "M"/"MA" stand for Maria
+#    b. the first word
+#    c. forenames written together ("JUANCARLOS", "MARIAJESUS"): the longest census
+#       forename the first word starts with
+#    d. the second forename, skipping particles ("LEONIA ALEXANDRA", "J DEL ROCIO")
+#    e. foreign or rare forenames the census does not carry, set by hand below
+#    f. a misspelt first word ("PACUAL", "MAGADALENA"): the census forename one letter apart
+#    g. what is left: ending in -A, Female; otherwise, Male
+census_forenames <- ine_forenames_sex |>
+  filter(frequency >= 100, !str_detect(forename, " "))
+
+forename_corrections <- tribble(
+  ~first_one,     ~sex_e,
+  "ANABEIDY",     "Female", "ANATERESA",  "Female", "ANAVANESA",  "Female", "AHIATIMA",   "Female",
+  "AUVELLY",      "Female", "CARUCHA",    "Female", "DOBROSLAVA", "Female", "EMERENCIA",  "Female",
+  "EUDIVIGIS",    "Female", "EUKARIS",    "Female", "FAITIA",     "Female", "GLISELIA",   "Female",
+  "IBOLYAKINGA",  "Female", "ISOLGITA",   "Female", "LUCIVANIA",  "Female", "MAGACEDA",   "Female",
+  "MALLAURY",     "Female", "MARIUXI",    "Female", "MERCHINES",  "Female", "MISSANDRA",  "Female",
+  "NAOULA",       "Female", "OSDANAY",    "Female", "OSLAIDA",    "Female", "SLADANA",    "Female",
+  "VALBONA",      "Female", "YULEISIS",   "Female", "IDERMIS",    "Female", "ENERIET",    "Female",
+  "ARGYRIS",      "Male",   "BEDROS",     "Male",   "CANCIANO",   "Male",   "CESIDIO",    "Male",
+  "GARBEIL",      "Male",   "HARTIOUN",   "Male",   "KEFAH",      "Male",   "OLIVEIRO",   "Male",
+  "SANTE",        "Male",   "SIQUEM",     "Male",   "TRAJANO",    "Male",   "TROYANO",    "Male",
+  "VANGELIS",     "Male",   "AMROU",      "Male"
+)
+
+sex_by_forename <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(name      = str_replace(person_id, "^MA? ", "MARIA "),
+         first_two = word(name, 1, 2),
+         first_one = word(name, 1),
+         second    = word(str_squish(str_remove_all(name, "\\b(DE|DEL|LA|LAS|LOS)\\b")), 2)) |>
+  left_join(ine_forenames_sex |> select(first_two = forename, sex_a = sex_forename), by = "first_two") |>
+  left_join(ine_forenames_sex |> select(first_one = forename, sex_b = sex_forename), by = "first_one") |>
+  left_join(ine_forenames_sex |> select(second = forename, sex_d = sex_forename), by = "second")
+
+written_together <- sex_by_forename |>
+  filter(is.na(sex_a), is.na(sex_b)) |>
+  distinct(first_one) |>
+  cross_join(census_forenames |> filter(str_length(forename) >= 4) |> select(forename, sex_forename)) |>
+  filter(str_starts(first_one, forename), first_one != forename) |>
+  slice_max(str_length(forename), n = 1, by = first_one, with_ties = FALSE) |>
+  select(first_one, sex_c = sex_forename)
+
+misspelt <- sex_by_forename |>
+  filter(is.na(sex_a), is.na(sex_b), is.na(sex_d)) |>
+  distinct(first_one)
+
+distances <- adist(misspelt$first_one, census_forenames$forename)
+
+misspelt <- misspelt |>
+  mutate(closest  = census_forenames$forename[apply(distances, 1, which.min)],
+         distance = apply(distances, 1, min),
+         sex_f    = if_else(distance == 1, census_forenames$sex_forename[apply(distances, 1, which.min)], NA))
+
+sex_by_forename <- sex_by_forename |>
+  left_join(written_together, by = "first_one") |>
+  left_join(misspelt |> select(first_one, closest, sex_f), by = "first_one") |>
+  left_join(forename_corrections, by = "first_one") |>
+  mutate(sex_g    = if_else(str_ends(first_one, "A"), "Female", "Male"),
+         sex_name = coalesce(sex_a, sex_b, sex_c, sex_d, sex_e, sex_f, sex_g),
+         sex_rule = case_when(!is.na(sex_a) ~ "a", !is.na(sex_b) ~ "b", !is.na(sex_c) ~ "c",
+                              !is.na(sex_d) ~ "d", !is.na(sex_e) ~ "e", !is.na(sex_f) ~ "f", TRUE ~ "g"))
+
+# names resolved by the weaker rules (f, g): check them
+sex_by_forename |> filter(sex_rule %in% c("f", "g")) |> select(person_id, closest, sex_name, sex_rule) |> print(n = Inf)
+
+sex_by_forename <- sex_by_forename |>
+  select(person_id, sex_name)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("sex_person", "sex_name"))) |>
+  left_join(sex_by_person, by = "person_id") |>
+  left_join(sex_by_forename, by = "person_id") |>
+  mutate(sex = coalesce(sex, sex_person, sex_name)) |>
+  select(-sex_person, -sex_name)
+
+count(vox_candidates, sex)
+
+# names still without sex: must return 0 rows
+vox_candidates |> filter(is.na(sex)) |> distinct(person_id)
+```
+
+```{r SIGNEES AND FOUNDERS}
+# is_signee: signed the manifesto of reconversion.es; is_founder: in the founders table.
+# As with the party organs, a name is found when its words are in the candidate's
+# name; when it fits several candidates, the rule below picks one or leaves it out
+reference_names <- bind_rows(
+  signees_reconversion |> mutate(group = "signee"),
+  founders |> select(name) |> mutate(group = "founder")) |>
+  mutate(name_id = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  distinct(group, name_id)
+
+reference_words <- reference_names |>
+  distinct(name_id) |>
+  mutate(word = name_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct() |>
+  add_count(name_id, name = "n_words")
+
+candidate_words <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+# Vox elections and national or regional lists of each candidate, to break ties
+candidate_record <- vox_candidates |>
+  group_by(person_id) |>
+  summarise(n_elections       = n_distinct(election),
+            national_regional = any(level != "Municipal"),
+            .groups = "drop")
+
+reference_matches <- reference_words |>
+  filter(n_words >= 2) |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  count(name_id, person_id, n_words, name = "words_found") |>
+  filter(words_found == n_words,
+         # the words in the same order and together, except a middle name after the
+         # first one: "Pedro Fernandez Barbadillo" is "Pedro Maria Fernandez Barbadillo",
+         # but "Enrique Alvarez Lopez" is not "Enrique Lopez Alvarez" and
+         # "Jose Maria Alvarez" is not "Jose Maria Figaredo Alvarez Sala"
+         str_detect(person_id, str_c("\\b", word(name_id, 1), "\\b(.* )?", word(name_id, 2, -1), "\\b"))) |>
+  left_join(candidate_record, by = "person_id") |>
+  add_count(name_id, name = "n_candidates")
+
+# names that fit several candidates ("Santiago Abascal": Abascal Conde and his father
+# Abascal Escuza): the one who ran in national or regional lists in more elections
+chosen <- reference_matches |>
+  filter(n_candidates == 1 | national_regional) |>
+  slice_max(n_elections, n = 1, by = name_id) |>
+  add_count(name_id, name = "n_chosen") |>
+  filter(n_chosen == 1)
+
+# the same person under a shorter name ("Ana Velasco Vidalabarca" and
+# "Ana Maria Velasco Vidalabarca") is kept as well
+same_person <- reference_matches |>
+  inner_join(chosen |> select(name_id, chosen_id = person_id), by = "name_id") |>
+  filter(person_id != chosen_id,
+         map2_lgl(str_split(person_id, " "), str_split(chosen_id, " "), \(p, c) all(p %in% c)))
+
+# names left out: check them by hand
+reference_matches |> filter(!name_id %in% chosen$name_id) |> arrange(name_id)
+
+matched <- reference_names |>
+  inner_join(bind_rows(chosen, same_person) |> select(name_id, person_id), by = "name_id",
+             relationship = "many-to-many")   # a founder can also be a signee
+
+vox_candidates <- vox_candidates |>
+  mutate(is_signee  = person_id %in% matched$person_id[matched$group == "signee"],
+         is_founder = person_id %in% matched$person_id[matched$group == "founder"])
+```
+
+```{r VOX POSITIONS IN GOVERNMENT}
+vox_executive_positions <- tribble(
+  ~name,                               ~region,                ~position,                                                                                        ~start_date,  ~end_date,
+  # === Castilla y León I (2022-2024) ===
+  "JUAN GARCÍA-GALLARDO FRINGS",       "Castilla y León",      "Vicepresidente de la Junta de Castilla y León",                                                  "20/04/2022", "11/07/2024",
+  "GONZALO SANTONJA GÓMEZ-AGERO",      "Castilla y León",      "Consejero de Cultura, Turismo y Deporte",                                                        "20/04/2022", "11/07/2024",  # left Vox, stayed in office
+  "GERARDO DUEÑAS MERINO",             "Castilla y León",      "Consejero de Agricultura, Ganadería y Desarrollo Rural",                                         "20/04/2022", "11/07/2024",
+  "MARIANO VEGANZONES DÍEZ",           "Castilla y León",      "Consejero de Industria, Comercio y Empleo",                                                      "20/04/2022", "11/07/2024",
+  # === Comunidad Valenciana (2023-2024) ===
+  "VICENTE BARRERA SIMÓ",              "Comunidad Valenciana", "Vicepresidente Primero y Conseller de Cultura y Deporte",                                        "17/07/2023", "11/07/2024",
+  "ELISA NÚÑEZ SÁNCHEZ",               "Comunidad Valenciana", "Consellera de Justicia e Interior",                                                              "17/07/2023", "11/07/2024",
+  "JOSÉ LUIS AGUIRRE LARRAURI",        "Comunidad Valenciana", "Conseller de Agricultura, Ganadería y Pesca",                                                    "17/07/2023", "11/07/2024",
+  # === Extremadura I (2023-2024) ===
+  "MARÍA DEL CAMINO LIMIA",            "Extremadura",          "Consejera de Gestión Forestal y Mundo Rural",                                                    "20/07/2023", "05/10/2023",
+  "IGNACIO HIGUERO DE JUAN",           "Extremadura",          "Consejero de Gestión Forestal y Mundo Rural",                                                    "05/10/2023", "11/07/2024",  # left Vox, stayed in office
+  # === Aragón I (2023-2024) ===
+  "ALEJANDRO NOLASCO ASENSIO",         "Aragón",               "Vicepresidente Primero y Consejero de Desarrollo Territorial, Despoblación y Justicia",          "12/08/2023", "12/07/2024",
+  "ÁNGEL SAMPER SECORÚN",              "Aragón",               "Consejero de Agricultura, Ganadería y Alimentación",                                             "12/08/2023", "12/07/2024",
+  # === Región de Murcia (2023-2024) ===
+  "JOSÉ ÁNGEL ANTELO PAREDES",         "Región de Murcia",     "Vicepresidente y Consejero de Interior, Emergencias y Ordenación del Territorio",                "15/09/2023", "12/07/2024",
+  "JOSÉ MANUEL PANCORBO DE LA TORRE",  "Región de Murcia",     "Consejero de Fomento e Infraestructuras",                                                        "15/09/2023", "12/07/2024",
+  # === Extremadura II (2026-) ===
+  "ÓSCAR ARTURO FERNÁNDEZ CALLE",      "Extremadura",          "Vicepresidente y Consejero de Desregulación, Servicios Sociales y Familia",                      "30/04/2026", NA,
+  "JUAN JOSÉ GARCÍA LOBATO",           "Extremadura",          "Consejero de Agricultura, Ganadería y Medio Natural",                                            "30/04/2026", NA,
+  # === Aragón II (2026-) ===
+  "ALEJANDRO NOLASCO ASENSIO",         "Aragón",               "Vicepresidente Primero y Consejero de Desregulación, Bienestar Social y Familia",                "04/05/2026", NA,
+  "ARÁNZAZU SIMÓN PÉREZ",              "Aragón",               "Consejera de Agricultura, Ganadería y Alimentación",                                             "04/05/2026", NA,
+  "LUIS FRANCISCO BIENDICHO GRACIA",   "Aragón",               "Consejero de Medio Ambiente y Turismo",                                                          "04/05/2026", NA,
+  # === Castilla y León II (2026-) ===
+  "CARLOS POLLÁN FERNÁNDEZ",           "Castilla y León",      "Vicepresidente Primero y Consejero de Desregulación, Familia y Ayudas Sociales",                 "15/06/2026", NA,
+  "JOAQUÍN ANTONIO PINO",              "Castilla y León",      "Consejero de Agricultura, Ganadería, Medio Rural y Política Ambiental",                          "15/06/2026", NA,
+  "JOSÉ ALBERTO DÍAZ PICO",            "Castilla y León",      "Consejero de Cultura, Turismo y Deporte",                                                        "15/06/2026", NA,
+  # === Andalucía (2026-) ===
+  "MANUEL GAVIRA FLORENTINO",          "Andalucía",            "Vicepresidente Segundo y Consejero de Turismo, Justicia, Desregulación y Administración Local",  "10/07/2026", NA
+) |>
+  # same format as person_id in vox_candidates: no accents, no punctuation
+  mutate(name = name |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish())
+
+# the regional election after which each government was formed
+vox_executive_positions <- vox_executive_positions |>
+  mutate(election = case_when(
+    region == "Castilla y León"      & str_ends(start_date, "2022") ~ "autonomous_2022_02",
+    region == "Castilla y León"      & str_ends(start_date, "2026") ~ "autonomous_2026_03",
+    region == "Aragón"               & str_ends(start_date, "2023") ~ "autonomous_2023_05",
+    region == "Aragón"               & str_ends(start_date, "2026") ~ "autonomous_2026_02",
+    region == "Extremadura"          & str_ends(start_date, "2023") ~ "autonomous_2023_05",
+    region == "Extremadura"          & str_ends(start_date, "2026") ~ "autonomous_2025_12",
+    region == "Comunidad Valenciana"                                ~ "autonomous_2023_05",
+    region == "Región de Murcia"                                    ~ "autonomous_2023_05",
+    region == "Andalucía"                                           ~ "autonomous_2026_05"))
+
+# one row per person and election (Limia and Higuero share a post, Nolasco repeats)
+executive_by_candidate <- vox_executive_positions |>
+  group_by(person_id = name, election) |>
+  summarise(executive_position = str_c(position, collapse = " | "), .groups = "drop")
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("executive_position", "has_executive_position"))) |>
+  left_join(executive_by_candidate, by = c("person_id", "election")) |>
+  mutate(has_executive_position = !is.na(executive_position))
+```
+
+
+```{r VOX CER MEMBERS y NO SE QUE OTRA COSA}
+# one row per organic position, CEN flagged
+vox_positions <- read_excel(here("data", "manual", "vox_cargos_organos.xlsx"), sheet = "01 Personas y cargos") |>
+  mutate(name       = Nombre,
+         position   = Cargo,
+         organ      = Organo,
+         first_seen = ymd(`Primera constancia`),
+         last_seen  = ymd(`Ultima constancia`),
+         in_cen     = str_detect(Organo, "^CEN|^Comite Ejecutivo Nacional"),
+         name_id    = name |>
+           str_to_upper() |>
+           stringi::stri_trans_general("Latin-ASCII") |>
+           str_remove_all("[^A-Z ]") |>
+           str_squish()) |>
+  select(name, name_id, position, organ, first_seen, last_seen, in_cen)
+
+# the organs give short names ("Alejandro Nolasco"), the lists full ones
+# ("Alejandro Nolasco Asensio"): a name matches a candidate when all its words
+# are in the candidate's name, and only if exactly one candidate fits
+name_words <- vox_positions |>
+  distinct(name_id) |>
+  mutate(word = name_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct() |>
+  add_count(name_id, name = "n_words")
+
+candidate_words <- vox_candidates |>
+  distinct(person_id) |>
+  mutate(word = person_id) |>
+  separate_longer_delim(word, " ") |>
+  distinct()
+
+name_matches <- name_words |>
+  inner_join(candidate_words, by = "word", relationship = "many-to-many") |>
+  count(name_id, person_id, n_words, name = "words_found") |>
+  filter(words_found == n_words) |>
+  add_count(name_id, name = "n_candidates")
+
+# names that fit several candidates: left out, check them by hand
+name_matches |> filter(n_candidates > 1) |> arrange(name_id)
+
+# last capture of the VOX website: whoever still appears then is still in the CEN
+last_capture <- ymd("2026-09-06")
+
+organ_info <- vox_positions |>
+  inner_join(name_matches |> filter(n_candidates == 1) |> select(name_id, person_id), by = "name_id") |>
+  group_by(person_id) |>
+  summarise(organic_positions = str_c(unique(position), collapse = " | "),
+            organ_first_seen  = first(sort(first_seen)),
+            organ_last_seen   = last(sort(last_seen)),
+            cen_from          = first(sort(first_seen[in_cen])),
+            cen_to            = last(sort(last_seen[in_cen])),
+            .groups = "drop") |>
+  mutate(cen_to = if_else(cen_to == last_capture, NA, cen_to))   # NA = still in the CEN
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("organic_positions", "organ_first_seen", "organ_last_seen", "in_cen", "cen_from", "cen_to",
+                   "has_organic_position", "in_cen_at_election", "in_cen_before"))) |>
+  left_join(organ_info, by = "person_id") |>
+  mutate(has_organic_position = !is.na(organic_positions),
+         # was in the CEN before this election (election month taken as its date)
+         in_cen_before        = coalesce(cen_from < ym(str_extract(election, "[0-9]{4}_[0-9]{2}")), FALSE))
+```
+
+```{r SEATS ACTUALLY WON}
+# seats Vox won in each list: one list = election + chamber + constituency
+# (chamber keeps Congress and Senate apart; in municipal lists chamber is the municipality)
+seats_won <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  group_by(election, chamber, province) |>
+  summarise(seats_won = sum(is_elected %in% TRUE), .groups = "drop")
+
+# did the number 1 of this same list (same chamber and constituency) win a seat
+# in the previous election of that type? Whoever it was: not matched by name
+previous_head_won <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA), list_position == 1) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  group_by(chamber, province, date) |>
+  summarise(head_won = any(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(chamber, province, date) |>
+  group_by(chamber, province) |>
+  mutate(previous_head_won = lag(head_won, default = FALSE)) |>
+  ungroup() |>
+  select(chamber, province, date, previous_head_won)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("seats_won", "top_won"))) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  left_join(seats_won,         by = c("election", "chamber", "province")) |>
+  left_join(previous_head_won, by = c("chamber", "province", "date")) |>
+  # top_won: heads this list, and the head of this list won a seat last time
+  mutate(top_won = is_titular %in% c(TRUE, NA) & list_position == 1 & previous_head_won %in% TRUE) |>
+  select(-previous_head_won)
+```
+
+```{r VOX EXPECTED SEATS + TOP CANDIDATES}
+# ---------------------------------------- 1. CIS estimate for each list (midpoint, rounded up)
+# how the CIS spells the provinces that the lists spell differently
+same_place <- c("ILLES BALEARS" = "BALEARES",
+                "GIPUZKOA"      = "GUIPUZCOA",
+                "BIZKAIA"       = "VIZCAYA",
+                "ARABA/ALAVA"   = "ALAVA",
+                "S.C. TENERIFE" = "SANTA CRUZ DE TENERIFE",
+                "CIUDAD"        = "CIUDAD REAL")
+
+cis_seats <- read_csv(here("data", "raw", "cis_estimaciones", "cis_estimaciones_vox.csv"), show_col_types = FALSE) |>
+  mutate(date       = str_extract(election, "[0-9]{4}_[0-9]{2}"),
+         # type of election of each estimate (the CIS does not estimate the Senate)
+         cis_chamber = case_when(str_starts(election, "generales")   ~ "Congress",
+                                 str_starts(election, "europeas")    ~ "European Parliament",
+                                 str_starts(election, "autonomicas") ~ "Autonomical",
+                                 str_starts(election, "municipales") ~ "Municipal"),
+         place      = coalesce(province, circumscription) |>
+                        str_to_upper() |>
+                        stringi::stri_trans_general("Latin-ASCII"),
+         cis_seats  = ceiling((min_seats + max_seats) / 2),
+         # the file also carries rows that are not CIS estimates
+         cis_source = case_when(str_starts(source, "CIS")     ~ "CIS constituency estimate",
+                                str_starts(source, "electos") ~ "previous result, same constituency",
+                                TRUE                          ~ "no CIS estimate before 2018 (0)")) |>
+  add_count(date, cis_chamber, place) |>
+  filter(n == 1) |>                  # two municipalities called Cieza: no way to tell them apart
+  select(date, cis_chamber, place, cis_seats, cis_source)
+
+# ------------------ 2. fallback: seats won in that same list in the previous election
+previous_seats <- vox_candidates |>
+  filter(is_titular %in% c(TRUE, NA)) |>
+  mutate(date = str_extract(election, "[0-9]{4}_[0-9]{2}")) |>
+  group_by(chamber, province, date) |>
+  summarise(seats_won = sum(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(chamber, province, date) |>
+  group_by(chamber, province) |>
+  mutate(previous_seats = lag(seats_won)) |>          # NA = first time Vox ran this list
+  ungroup() |>
+  select(chamber, province, date, previous_seats)
+
+# ----------------------------------------------- 3. expected seats into the lists
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("expected_seats", "expected_seats_source", "top_expected"))) |>
+  mutate(date        = str_extract(election, "[0-9]{4}_[0-9]{2}"),
+         cis_chamber = case_when(chamber %in% c("Congress", "European Parliament") ~ chamber,
+                                 level %in% c("Autonomical", "Municipal")          ~ level,
+                                 TRUE                                              ~ "Senate"),
+         place       = if_else(level == "Municipal", chamber, province) |>
+                         str_to_upper() |>
+                         stringi::stri_trans_general("Latin-ASCII"),
+         place       = if_else(chamber == "European Parliament", "ESPANA", place),
+         place       = coalesce(same_place[place], place)) |>
+  left_join(cis_seats,      by = c("date", "cis_chamber", "place")) |>
+  left_join(previous_seats, by = c("chamber", "province", "date")) |>
+  mutate(expected_seats        = coalesce(cis_seats, previous_seats, 0),
+         expected_seats_source = case_when(!is.na(cis_seats)      ~ cis_source,
+                                           !is.na(previous_seats) ~ "previous result, same constituency",
+                                           TRUE                   ~ "first contest (0)"),
+         top_expected          = is_titular %in% c(TRUE, NA) & list_position <= expected_seats) |>
+  select(-cis_chamber, -place, -cis_seats, -cis_source, -previous_seats)
+
+# ---------------- 4. did the person win a seat in the election they ran in just before?
+seat_by_date <- vox_candidates |>
+  filter(!is.na(person_id), person_id != "") |>
+  group_by(person_id, date) |>
+  summarise(won_seat = any(is_elected %in% TRUE), .groups = "drop") |>
+  arrange(person_id, date) |>
+  group_by(person_id) |>
+  mutate(had_seat_before = lag(won_seat, default = FALSE)) |>
+  ungroup() |>
+  select(person_id, date, had_seat_before)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of("had_seat_before")) |>
+  left_join(seat_by_date, by = c("person_id", "date")) |>
+  mutate(had_seat_before = coalesce(had_seat_before, FALSE))
+```
+
+```{r ISCO VARIABLES JOIN}
+# occupation before politics (ISCO-08) of the Congress candidates of July 2023 within
+# the electoral threshold, and of the three titulars right below it in each constituency,
+# who are neither heads of list nor above the threshold in that election
+# (data/manual/isco_candidatos_2023.xlsx, column GRUPO)
+isco_candidates <- read_excel(here("data", "manual", "isco_candidatos_2023.xlsx")) |>
+  select(person_id          = PERSON_ID,
+         isco08_group       = GRUPO,
+         isco08             = ISCO08,
+         isco08_title       = ISCO08_TITLE,
+         isco08_major       = ISCO08_MAJOR,
+         isco08_major_title = ISCO08_MAJOR_TITLE)
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("isco08_group", "isco08", "isco08_title", "isco08_major", "isco08_major_title"))) |>
+  left_join(isco_candidates, by = "person_id")
+```
+
+```{r IN LISTS IN 2013-2017}
+# people who already stood on a Vox list between 2013 and 2017, when Vox had
+# almost no representation
+early_candidates <- vox_candidates |>
+  filter(between(year, 2013, 2017)) |>
+  distinct(person_id)
+
+vox_candidates <- vox_candidates |>
+  mutate(in_lists_2013_2017 = person_id %in% early_candidates$person_id)
+```
+
+
+```{r PREV PARTY VARIABLE}
+# ------------------------------------ 2. every candidacy for another party, with its year
+other_party_candidacies <- bind_rows(
+  pp_candidates |> mutate(prev_party = "PP") |> select(person_id, year, prev_party),
+  cs_candidates |> mutate(prev_party = "Cs") |> select(person_id, year, prev_party),
+  radical_right_candidates |>
+    left_join(party_abbreviations, by = "party") |>
+    select(person_id, year, prev_party)) |>
+  filter(!is.na(person_id), person_id != "") |>
+  mutate(year = as.integer(year),
+         person_id = person_id |>
+           # labels the bulletins print after the name ("IND" for independents, the
+           # party, the section), which stop the same person from matching
+           str_remove(" (CV BOCYLD |TITULARES )?NUM$") |>
+           str_remove(" (IND|JN|AND|UPN|FN|MOVIMENT SOCIAL)$") |>
+           # surnames split at the end of the line in the PDFs: "FERNAND EZ"
+           str_replace("(?<=[A-Z]{3}) (EZ|Z)$", "\\1") |>
+           str_squish()) |>
+  distinct()
+
+# ------------------------------------ 3. parties found in the press (data/manual/prev_party_prensa.xlsx):
+# candidates within the expected seats who had been in another party before joining Vox
+press_prev_party <- read_excel(here("data", "manual", "prev_party_prensa.xlsx")) |>
+  select(person_id = PERSON_ID, prev_party = PARTIDO_ANTERIOR) |>
+  separate_longer_delim(prev_party, " | ")
+
+# ------------------- 4. parties the person had been in BEFORE each Vox candidacy
+vox_candidacy_years <- vox_candidates |>
+  distinct(person_id, year)
+
+prev_party_by_year <- bind_rows(
+  # ran for another party in an earlier year
+  vox_candidacy_years |>
+    inner_join(other_party_candidacies, by = "person_id", suffix = c("", "_other"),
+               relationship = "many-to-many") |>
+    filter(year_other < year) |>
+    select(person_id, year, prev_party),
+  # member of another party before joining Vox, according to the press
+  vox_candidacy_years |>
+    inner_join(press_prev_party, by = "person_id", relationship = "many-to-many")) |>
+  group_by(person_id, year) |>
+  summarise(prev_party = str_c(sort(unique(prev_party)), collapse = " | "), .groups = "drop")
+
+vox_candidates <- vox_candidates |>
+  select(-any_of(c("prev_party", "has_prev_party"))) |>
+  left_join(prev_party_by_year, by = c("person_id", "year")) |>
+    mutate(has_prev_party = if_else(!is.na(prev_party), TRUE, NA))
+```
+
+
+# Objects for the next scripts
+
+```{r SAVE}
+# the objects the following scripts use
+dir.create(here("data", "processed"), showWarnings = FALSE, recursive = TRUE)
+save(list = c("candidate_words", "census_forenames", "seats_won", "vox_candidates",
+     "vox_executive_positions"),
+     file = here("data", "processed", "04_data_enrichment.RData"))
+```
